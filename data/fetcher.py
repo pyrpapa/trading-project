@@ -28,12 +28,24 @@ def fetch(ticker: str, start: str, end: str, force_refresh: bool = False, namesp
     `namespace` keeps caches separate for different use cases (e.g. a
     long backtest history cache vs. a short rolling live-check cache)
     so one doesn't overwrite the other.
+
+    The cache is only used if it actually covers the requested date
+    range — a cache built for 2019-2024 won't be silently reused (and
+    silently sliced to empty) for a 2012-2018 request. It refetches
+    automatically if the cached range doesn't cover what's asked for.
     """
     path = _cache_path(ticker, namespace)
 
     if not force_refresh and os.path.exists(path):
         df = pd.read_csv(path, index_col=0, parse_dates=True)
-        return df.loc[start:end]
+        cache_covers_range = (
+            not df.empty
+            and df.index.min() <= pd.Timestamp(start)
+            and df.index.max() >= pd.Timestamp(end)
+        )
+        if cache_covers_range:
+            return df.loc[start:end]
+        # else: fall through and refetch — cache exists but doesn't cover this range
 
     try:
         import yfinance as yf
@@ -49,27 +61,4 @@ def fetch(ticker: str, start: str, end: str, force_refresh: bool = False, namesp
         raise RuntimeError(f"No data returned for {ticker}. Check the ticker symbol.")
 
     # yfinance sometimes returns multi-index columns; flatten if so
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df = df[["Open", "High", "Low", "Close", "Volume"]]
-    df.to_csv(path)
-    return df.loc[start:end]
-
-
-def fetch_watchlist(tickers: list, start: str, end: str) -> dict:
-    """Returns {ticker: DataFrame} for every ticker in the watchlist."""
-    return {t: fetch(t, start, end) for t in tickers}
-
-
-if __name__ == "__main__":
-    # Manual run: populate the cache for the default watchlist
-    import yaml
-    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config", "strategy.yaml")
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-
-    for ticker in cfg["watchlist"]:
-        print(f"Fetching {ticker}...")
-        df = fetch(ticker, cfg["backtest"]["start_date"], cfg["backtest"]["end_date"], force_refresh=True)
-        print(f"  {len(df)} rows cached to {_cache_path(ticker, 'default')}")
+    if isinstance(df.columns,
