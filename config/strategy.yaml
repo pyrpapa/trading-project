@@ -1,0 +1,41 @@
+# =============================================================
+# STRATEGY CONFIG — this file IS your trading logic.
+# Change numbers here, rerun the backtest, see what changes.
+# Nothing in the code should need editing to tweak the strategy.
+# =============================================================
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+# --- Entry (buy) rule ---
+entry:
+  # Buy when price closes above its N-day moving average
+  ma_period: 20
+  # AND today's volume is above its N-day average volume (confirmation)
+  volume_confirmation: true
+  volume_ma_period: 20
+
+# --- Exit (sell) rule ---
+exit:
+  # Sell if price closes back below the same moving average (trend exit)
+  ma_exit: true
+  # Sell if position drops this % from entry price, regardless of MA (safety net)
+  stop_loss_pct: 8.0
+  # Optional: sell if position gains this % from entry (locks in profit). null = disabled
+  take_profit_pct: null
+
+# --- Position sizing / risk controls ---
+risk:
+  # Max % of total portfolio value in a single position
+  max_position_pct: 5.0
+  # Max % of total portfolio allowed to be in the market at once (rest stays cash)
+  max_invested_pct: 60.0
+
+# --- Backtest settings ---
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0    # Alpaca is commission-free; kept here in case that changes

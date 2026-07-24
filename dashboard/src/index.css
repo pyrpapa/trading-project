@@ -1,0 +1,63 @@
+:root {
+  /* --- Color: deep slate console, amber signal accent (oscilloscope feel) --- */
+  --bg: #0f1419;
+  --surface: #171d24;
+  --surface-raised: #1e252d;
+  --border: #2c3540;
+  --border-bright: #3a4552;
+
+  --text-primary: #e4e7ea;
+  --text-muted: #7c8892;
+  --text-faint: #4c5760;
+
+  --accent: #e8a33d;       /* amber — the signature color, used sparingly */
+  --accent-dim: #8a642a;
+  --positive: #6fa287;     /* muted sage, not neon */
+  --negative: #c6604f;     /* muted brick, not alarm-red */
+
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  --radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-dim);
+  color: var(--bg);
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font-family: var(--font-body);
+  cursor: pointer;
+}
+
+/* Focus visibility, kept even though we're using custom controls */
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

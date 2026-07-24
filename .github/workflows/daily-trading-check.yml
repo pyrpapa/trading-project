@@ -1,0 +1,39 @@
+name: Daily trading check
+
+on:
+  schedule:
+    # 20:30 UTC ≈ 4:30pm ET (after market close at 4pm ET).
+    # UTC offset shifts with US daylight saving — during EST (winter)
+    # this runs at 3:30pm ET instead. Adjust if that matters to you.
+    - cron: "30 20 * * 1-5"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+
+jobs:
+  run-live-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run live trading check
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: "true"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python live/run_live.py
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log
+          path: live.log
+          if-no-files-found: ignore
