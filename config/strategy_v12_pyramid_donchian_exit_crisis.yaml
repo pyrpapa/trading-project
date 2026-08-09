@@ -1,0 +1,76 @@
+# TEST v12-crisis -- same combined pyramiding + Donchian-low exit as
+# strategy_v12_pyramid_donchian_exit.yaml, run against 2006-2011 (the
+# runup, the 2007-2009 financial crisis crash, and the early recovery)
+# instead of 2019-2024.
+#
+# Why this matters more for v12 than it did for v10 or v11 individually:
+# v12's real-data result on 2019-2024 (see PROJECT_STATUS.md #25) was the
+# project's best total/annualized return, but also its deepest non-crisis
+# max drawdown (-9.95%) -- and BOTH of v12's ingredients are mechanisms
+# that could plausibly get worse, not just proportionally worse, in a
+# real crash:
+#   - Pyramiding adds MORE size into a position specifically as it moves
+#     further in your favor -- which is also often exactly when a trend
+#     is closest to exhausting itself and reversing. Adding risk right
+#     as N (volatility) spikes mid-drawdown was flagged as an open
+#     question back at v10 (#20) and has never been tested.
+#   - The Donchian-low exit holds a position longer before closing,
+#     giving back more before finally exiting a trade that's turning
+#     into a loser -- v11 alone already showed this costs 2.16 points of
+#     extra drawdown on top of v5 in the calm 2019-2024 window; a real
+#     crash is exactly the environment where "give back more before
+#     exiting" could compound much further.
+# Running v12 here, alongside v5-crisis/v10-crisis for comparison, is
+# meant to answer: does the compounding effect that helped so much in
+# 2019-2024 (see #25 -- super-additive gains, sub-additive drawdown cost)
+# hold up in a real crash, or does combining two "let more risk/reward
+# through" levers become a genuinely worse idea once N is spiking for
+# real and not just extending a bull trend?
+#
+# Nothing else changed from v12 -- same watchlist, same MA-crossover
+# entry, same N/ATR-based sizing, same pyramiding settings (0.5N/4
+# units), same Donchian-low exit (10-day). Only the backtest window
+# moved to match v5-crisis/v4-crisis, so all crisis-window results in
+# this project stay directly comparable.
+#
+# Compare directly against v5-crisis (and, once built, v10-crisis /
+# v11-crisis) on the same window:
+#   python run_backtest.py --config config/strategy_v5_crisis.yaml --chart --save --label "v5-crisis-compare"
+#   python run_backtest.py --config config/strategy_v12_pyramid_donchian_exit_crisis.yaml --chart --save --label "v12-crisis"
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low        # from v11
+  exit_breakout_period: 10  # Turtle System 1 -- exit on a new 10-day low
+  stop_loss_pct: 8.0         # ignored in atr_unit sizing mode, same as v5
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  pyramiding:                # from v10
+    enabled: true
+    unit_interval_n: 0.5     # add a unit every 0.5N further in your favor (Turtle default)
+    max_units: 4              # cap the stack at 4 units total (Turtle default)
+  # No correlation_breaker / portfolio_selection blocks -- same
+  # isolation discipline as v12's 2019-2024 config.
+
+backtest:
+  starting_cash: 10000
+  start_date: "2006-01-01"
+  end_date: "2011-12-31"
+  commission_pct: 0.0

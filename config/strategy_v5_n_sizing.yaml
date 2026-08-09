@@ -1,0 +1,52 @@
+# EXPERIMENTAL v5 — Turtle-style N/ATR-based position sizing, in place of
+# the flat % position cap used in v1-v4. Same watchlist, same entry/exit
+# rule as v4, so this isolates ONE variable: how much you buy, not when.
+#
+# This is a "play around and build intuition" config, not a replacement
+# for v4 — compare them side by side:
+#   python run_backtest.py --config config/strategy_v4.yaml --chart --save --label "v4-compare"
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-n-sizing"
+#
+# How the sizing works (see backtest/engine.py + STRATEGY_GUIDE.md Section 9):
+#   1. N = ATR over atr_period days — the market's own recent volatility,
+#      in dollars per share.
+#   2. Initial stop is placed stop_atr_multiple * N away from entry. That
+#      distance, in dollars, is "1R" for this trade — the amount you're
+#      planning to lose if the stop is hit.
+#   3. Shares are sized so that 1R equals risk_pct_per_unit of total
+#      account equity — a volatile stock automatically gets fewer shares
+#      than a calm one, so every position risks roughly the same amount.
+#   4. max_position_pct/max_invested_pct still apply as a hard ceiling on
+#      top of the N-based size — a safety cap, not the primary sizing lever
+#      in this mode.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  # ma_exit / take_profit_pct unchanged from v4. stop_loss_pct is IGNORED
+  # in atr_unit sizing mode — the N-based stop (below) takes over instead.
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit    # "pct" (v1-v4 behavior) or "atr_unit" (Turtle-style)
+  atr_period: 20             # N = ATR over this many days
+  risk_pct_per_unit: 1.0     # risk 1% of account equity per unit (the Turtles' own default)
+  stop_atr_multiple: 2.0     # initial stop = 2N away from entry (defines 1R)
+  max_position_pct: 20.0     # still enforced as a ceiling, same as v4
+  max_invested_pct: 60.0     # unchanged
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

@@ -1,0 +1,78 @@
+# EXPERIMENTAL v8 -- swaps the MA-crossover entry rule for a Turtle-style
+# Donchian breakout entry (System 1: 20-day). Everything else is copied
+# from v5 UNCHANGED -- same watchlist, same N/ATR-based sizing, same
+# MA-based trend exit + 2N stop -- so this isolates ONE new variable:
+# the entry signal, not sizing, not the exit, not diversification.
+# Compare directly against v5 (baseline) on the same window:
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-compare"
+#   python run_backtest.py --config config/strategy_v8_donchian_breakout.yaml --chart --save --label "v8-donchian"
+#
+# Why this exists (see PROJECT_STATUS.md items #12/#13): portfolio
+# selection (v7) correctly identified TLT/GLD/JNJ/XOM/CAT/JPM as
+# genuinely less-correlated diversifiers than AAPL/MSFT/GOOGL/AMZN, but
+# real-data results were still much worse than v5 on return, win rate,
+# and SQN -- best explanation is that the MA-crossover entry rule doesn't
+# produce clean signals on non-trending, lower-volatility assets like
+# bonds/gold/defensive sectors, echoing v3's earlier failed
+# diversification attempt. This config tests the OTHER half of that
+# theory on the current 3-ticker watchlist first, before combining it
+# with portfolio selection: does a breakout-based entry, which is what
+# the Turtles used specifically because it needed to work across very
+# different market types, actually behave differently than MA-crossover?
+#
+# How the entry works (see strategy/rules.py):
+#   Buy when today's close is above the highest High of the PRIOR 20
+#   trading days (today excluded, so there's no lookahead) -- a genuine
+#   new price extreme, not a smoothed average crossing. No volume
+#   confirmation is required (per the original Turtle system -- the
+#   breakout itself is the trigger, see entry.volume_confirmation below).
+#
+# What did NOT change from v5, on purpose:
+#   - exit: still the MA-based trend exit (price closes back below its
+#     OWN 20-day moving average) + the N/ATR-based 2N stop. entry.ma_period
+#     is kept here ONLY because the exit rule still reads it -- it has no
+#     effect on entries in this config.
+#   - risk: identical N/ATR sizing settings to v5.
+#   - watchlist: identical SPY/AAPL/MSFT three tickers, identical window.
+#
+# Once this has a real-data result, the natural follow-up is a "v9"
+# combining Donchian entries WITH portfolio selection's 14-candidate
+# universe, to test whether breakout entries unlock the diversification
+# benefit v7 couldn't.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  type: donchian_breakout   # "ma_crossover" (v1-v7 default) or "donchian_breakout"
+  breakout_period: 20       # Turtle System 1 -- buy on a new 20-day high
+  volume_confirmation: false  # dropped for breakout entries -- see header comment
+  # ma_period / volume_ma_period below are UNUSED for entries in this
+  # config (entry.type overrides them) but are still read by the exit
+  # rule (ma_period) and by add_indicators (volume_ma_period, computed
+  # unconditionally but not consulted since volume_confirmation is off).
+  ma_period: 20
+  volume_ma_period: 20
+
+exit:
+  # Unchanged from v5 on purpose -- see header comment.
+  ma_exit: true
+  stop_loss_pct: 8.0   # ignored in atr_unit sizing mode, same as v5
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  # No correlation_breaker block -- isolating one variable at a time.
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

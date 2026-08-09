@@ -60,5 +60,44 @@ def fetch(ticker: str, start: str, end: str, force_refresh: bool = False, namesp
     if df.empty:
         raise RuntimeError(f"No data returned for {ticker}. Check the ticker symbol.")
 
-    # yfinance sometimes returns multi-index columns; flatten if so
-    if isinstance(df.columns,
+    # yfinance sometimes returns multi-index columns (e.g. ('Close', 'AAPL'))
+    # even for a single ticker, depending on version; flatten if so.
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # Keep only the columns the rest of the codebase expects, in a
+    # consistent order.
+    keep_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+    df = df[keep_cols]
+
+    df.to_csv(path)
+
+    return df.loc[start:end]
+
+
+def fetch_watchlist(tickers: list, start: str, end: str, namespace: str = "default") -> dict:
+    """
+    Fetches price data for every ticker in a watchlist. Returns
+    {ticker: DataFrame}. Uses fetch() per ticker under the hood, so
+    caching behavior is identical to fetching a single ticker.
+    """
+    return {ticker: fetch(ticker, start, end, namespace=namespace) for ticker in tickers}
+
+
+if __name__ == "__main__":
+    # Populate the cache for a reasonable default range when run directly,
+    # e.g.: python data/fetcher.py
+    import yaml
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config", "strategy.yaml")
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
+    tickers = cfg["watchlist"]
+    start = cfg["backtest"]["start_date"]
+    end = cfg["backtest"]["end_date"]
+
+    print(f"Fetching {tickers} from {start} to {end}...")
+    for ticker in tickers:
+        df = fetch(ticker, start, end, force_refresh=True)
+        print(f"  {ticker}: {len(df)} rows cached")

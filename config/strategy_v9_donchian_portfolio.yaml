@@ -1,0 +1,83 @@
+# EXPERIMENTAL v9 -- combines v7's portfolio selection with v8's
+# Donchian breakout entries. Direct test of the hypothesis raised by
+# v8's real-data result (see PROJECT_STATUS.md #15): breakout entries
+# produced a meaningfully higher win rate/R-multiple/SQN than
+# MA-crossover on SPY/AAPL/MSFT, tickers where MA-crossover was
+# already working reasonably well. v7's problem was specifically that
+# MA-crossover fell apart on the non-trending, lower-volatility assets
+# (TLT/GLD/defensive sectors) portfolio selection correctly identified
+# as good diversifiers -- win rate collapsed to 31.58%, avg R-multiple
+# to 0.19R. If breakout entries filter chop as well on THOSE assets as
+# they did on SPY/AAPL/MSFT, this could recover v7's win rate/R-multiple
+# without losing its best-yet max drawdown (-4.72%).
+#
+# Everything here is copied UNCHANGED from v7 except entry.type/
+# breakout_period/volume_confirmation (from v8). Compare all four
+# directly on the same window:
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-compare"
+#   python run_backtest.py --config config/strategy_v7_portfolio_selection.yaml --chart --save --label "v7-compare"
+#   python run_backtest.py --config config/strategy_v8_donchian_breakout.yaml --chart --save --label "v8-compare"
+#   python run_backtest.py --config config/strategy_v9_donchian_portfolio.yaml --chart --save --label "v9-donchian-portfolio"
+#
+# `watchlist` below is unused/ignored when portfolio_selection.enabled
+# is true -- kept only so this file still parses cleanly with tools
+# that expect the key to exist. The real trading universe is
+# portfolio_selection.candidate_universe (identical to v7's).
+
+watchlist: []
+
+entry:
+  type: donchian_breakout   # from v8 -- see config/strategy_v8_donchian_breakout.yaml
+  breakout_period: 20       # Turtle System 1
+  volume_confirmation: false
+  # ma_period / volume_ma_period below are UNUSED for entries in this
+  # config (entry.type overrides them) but are still read by the exit
+  # rule (ma_period) -- same as v8, unchanged here.
+  ma_period: 20
+  volume_ma_period: 20
+
+exit:
+  # Unchanged from v5/v7/v8 on purpose -- see header comment.
+  ma_exit: true
+  stop_loss_pct: 8.0   # ignored in atr_unit sizing mode
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  # No correlation_breaker block -- isolating variables one at a time,
+  # same as v7 and v8.
+
+portfolio_selection:
+  # Identical to config/strategy_v7_portfolio_selection.yaml -- only
+  # the entry rule above differs between v7 and v9.
+  enabled: true
+  candidate_universe:
+    - SPY    # broad market index
+    - AAPL   # tech
+    - MSFT   # tech
+    - GOOGL  # tech
+    - AMZN   # consumer/tech
+    - JPM    # financials
+    - JNJ    # healthcare
+    - XOM    # energy
+    - CAT    # industrials
+    - PG     # consumer staples
+    - TLT    # long-term treasury bonds
+    - GLD    # gold
+    - XLU    # utilities (defensive/low-beta)
+    - VNQ    # REITs
+  target_size: 3
+  min_avg_dollar_volume: 20000000
+  lookback_period: 90
+  rebalance_frequency_months: 3
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

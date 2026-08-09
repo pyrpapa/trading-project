@@ -1,0 +1,66 @@
+# EXPERIMENTAL v6 — adds the correlation-based circuit breaker on top of
+# v5's N/ATR-based sizing. Same watchlist, same entry/exit rule, same
+# sizing method as strategy_v5_n_sizing.yaml -- this isolates ONE more
+# variable: whether a new position is even ALLOWED to open, given what's
+# already held, not how big it is or when it fires.
+#
+# Compare against v5 (no breaker) to see what the breaker actually costs
+# / protects:
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-compare"
+#   python run_backtest.py --config config/strategy_v6_circuit_breaker.yaml --chart --save --label "v6-circuit-breaker"
+#
+# How the breaker works (see strategy/correlation.py + backtest/engine.py):
+#   1. Before opening a new position, compute the trailing Pearson
+#      correlation (over lookback_period trading days of daily returns)
+#      between the candidate ticker and every position CURRENTLY open.
+#   2. If correlation_threshold+ correlation is found with
+#      max_correlated_positions or more already-open positions, the new
+#      entry is skipped entirely -- the breaker "trips". Logged the same
+#      way entries/exits are (see strategy_v6's blocked_signals in the
+#      backtest result / report.py's "Blocked by breaker" stat tile).
+#
+# Important context for THIS specific watchlist: SPY/AAPL/MSFT are
+# already known to be highly correlated with each other (AAPL and MSFT
+# are two of SPY's largest holdings) -- see the portfolio-selection gap
+# noted in strategy_and_chart_reference.md. With only 3 correlated
+# tickers and max_correlated_positions: 2, expect this to meaningfully
+# cut how often all 3 end up held simultaneously, compared to v5.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  # stop_loss_pct is IGNORED in atr_unit sizing mode -- see risk block below.
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+
+  correlation_breaker:
+    enabled: true
+    lookback_period: 60           # trading days of returns used to compute correlation
+    correlation_threshold: 0.7    # Pearson correlation at/above this counts as "correlated"
+    max_correlated_positions: 2   # 2+ already-open correlated positions trips the breaker
+                                   # (i.e. a 3rd correlated position is blocked -- with only
+                                   # 3 tickers total here, that means "never all three at once
+                                   # if they're all mutually correlated above threshold")
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

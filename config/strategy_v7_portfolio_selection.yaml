@@ -1,0 +1,101 @@
+# EXPERIMENTAL v7 -- adds portfolio selection on top of v5's N/ATR-based
+# sizing. Same entry/exit rule and sizing method as
+# config/strategy_v5_n_sizing.yaml; the circuit breaker (v6) is
+# DELIBERATELY left off here to isolate ONE new variable against the
+# last known-good baseline, since v6's own real-data result was net
+# negative (see PROJECT_STATUS.md) -- this tests whether choosing a
+# genuinely less-correlated set of markets up front works better than
+# policing an already-correlated static list after the fact.
+#
+# Compare against v5 (no portfolio selection) and v6 (circuit breaker
+# instead) on the same window:
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-compare"
+#   python run_backtest.py --config config/strategy_v6_circuit_breaker.yaml --chart --save --label "v6-compare"
+#   python run_backtest.py --config config/strategy_v7_portfolio_selection.yaml --chart --save --label "v7-portfolio-selection"
+#
+# How selection works (see strategy/portfolio_selection.py +
+# backtest/engine.py): every rebalance_frequency_months, using only
+# TRAILING price history up to that date (no lookahead):
+#   1. Liquidity filter -- drop any candidate whose trailing average
+#      DOLLAR volume (price * volume) is below min_avg_dollar_volume.
+#   2. Greedy diversification -- seed with the most liquid survivor,
+#      then repeatedly add whichever remaining candidate has the LOWEST
+#      average correlation to everything already picked, until
+#      target_size is reached.
+# Positions already open in a ticker that drops out at a rebalance are
+# NOT force-closed -- they're left to exit normally via their own
+# stop/trend-exit/take-profit. Only NEW entries are restricted to
+# whatever's currently selected.
+#
+# Known startup quirk: the very first rebalance (day 1 of the backtest)
+# has no trailing history yet, so the active set starts EMPTY and stays
+# that way until enough lookback_period days of data accumulate at a
+# later rebalance checkpoint -- expect close to zero trades for roughly
+# the first couple of quarters of this specific config. Same kind of
+# warm-up v5's N-based sizing already has with its 20-day ATR, just a
+# longer one here (90-day lookback).
+#
+# `watchlist` below is unused/ignored when portfolio_selection.enabled
+# is true -- kept only so this file still parses cleanly with tools
+# that expect the key to exist. The real trading universe is
+# portfolio_selection.candidate_universe.
+
+watchlist: []
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  # stop_loss_pct is IGNORED in atr_unit sizing mode -- see risk block below.
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  # No correlation_breaker block here on purpose -- see header comment.
+
+portfolio_selection:
+  enabled: true
+  # 14 liquid, sector- and asset-class-diverse candidates: the original
+  # 3 (SPY/AAPL/MSFT, both flagged elsewhere as correlated with each
+  # other), 4 more large-cap equities across different sectors, and 4
+  # non-equity ETFs (bonds/gold/utilities/REITs) for real cross-asset
+  # diversification -- utilities and bonds/gold were already tried once
+  # in v3 and that diversification attempt failed, but v3's failure was
+  # plausibly an entry-signal mismatch (MA-crossover/volume doesn't fire
+  # cleanly on bonds/gold), not a proof that diversification itself
+  # doesn't help. This lets the algorithm decide whether to actually use
+  # them, rather than forcing them into a fixed static watchlist.
+  candidate_universe:
+    - SPY    # broad market index
+    - AAPL   # tech
+    - MSFT   # tech
+    - GOOGL  # tech
+    - AMZN   # consumer/tech
+    - JPM    # financials
+    - JNJ    # healthcare
+    - XOM    # energy
+    - CAT    # industrials
+    - PG     # consumer staples
+    - TLT    # long-term treasury bonds
+    - GLD    # gold
+    - XLU    # utilities (defensive/low-beta)
+    - VNQ    # REITs
+  target_size: 3              # match v4/v5/v6's 3-ticker portfolios for a fair comparison
+  min_avg_dollar_volume: 20000000   # $20M/day trailing average -- all candidates above comfortably clear this
+  lookback_period: 90         # trading days of returns used for both the liquidity and correlation checks
+  rebalance_frequency_months: 3     # quarterly
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

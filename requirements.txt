@@ -5,3 +5,4 @@ yfinance>=0.2.40
 supabase>=2.3
 python-dotenv>=1.0
 alpaca-py>=0.30
+matplotlib>=3.8

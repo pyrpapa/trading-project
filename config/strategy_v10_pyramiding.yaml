@@ -1,0 +1,74 @@
+# EXPERIMENTAL v10 -- adds Turtle-style pyramiding on top of v5's N/ATR
+# sizing baseline. Everything here is copied UNCHANGED from v5 (same
+# watchlist, same MA-crossover entry, same MA-based exit, same N-based
+# sizing) except one new block: risk.pyramiding. Isolates pyramiding as
+# the ONE new variable, same discipline as every other vN config.
+#
+# The question this tests: v9's real-data result (PROJECT_STATUS.md #18)
+# showed this system's edge is fairly consistent per-trade (SQN ~1.8-2.2
+# across variants) but total return has lagged buy-and-hold-ish comparisons
+# because position sizing is currently RISK-driven only (how much could
+# this trade cost me) with no REWARD/conviction lever (how much is this
+# trade currently proving itself right). Pyramiding is that lever: instead
+# of placing one full-size bet at entry, it adds more size to a position
+# only as price confirms the trade is working, and only up to a capped
+# number of units -- so exposure grows with the position's own evidence
+# instead of being fixed at entry.
+#
+# Compare directly against v5 on the same window:
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-compare"
+#   python run_backtest.py --config config/strategy_v10_pyramiding.yaml --chart --save --label "v10-pyramiding"
+#
+# How pyramiding works (see backtest/engine.py + STRATEGY_GUIDE.md Section 14):
+#   1. Once a position is open, every day the engine checks: has price
+#      moved unit_interval_n * N further in the position's favor since the
+#      LAST unit's own entry price? (N = current ATR, re-measured fresh each
+#      time -- not the N from the original entry.)
+#   2. If yes, and the stack hasn't hit max_units yet, a new unit is added
+#      -- sized the same way as a fresh entry (risk_pct_per_unit of equity,
+#      current N-based stop distance), so a more volatile market
+#      automatically gets smaller add-on units, same logic as the initial
+#      entry.
+#   3. Every time a unit is added, the WHOLE stack's stop-loss is trailed
+#      up to the new unit's stop level (never down) -- so winners get
+#      progressively better protected as they add risk, and the entire
+#      stack always exits together on one shared stop or trend-exit signal.
+#   4. Each unit is still tracked and closed as its own separate trade
+#      record with its own entry price/shares/R-multiple -- Van Tharp's own
+#      convention (R-multiples and SQN are per-unit, not per-ticker-position).
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  # Unchanged from v5 on purpose -- see header comment.
+  ma_exit: true
+  stop_loss_pct: 8.0   # ignored in atr_unit sizing mode
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5   # add a unit every 0.5N further in your favor (Turtle default)
+    max_units: 4            # cap the stack at 4 units total (Turtle default)
+  # No correlation_breaker / portfolio_selection blocks -- isolating
+  # pyramiding as the one new variable, same as every other vN config.
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

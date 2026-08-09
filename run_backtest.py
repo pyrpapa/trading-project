@@ -8,6 +8,7 @@ Usage:
     python run_backtest.py --save                            # also save results to Supabase
     python run_backtest.py --save --label "v2"                # save with a run label
     python run_backtest.py --config config/strategy_v2.yaml   # use a different config file
+    python run_backtest.py --chart                           # also write an HTML chart report
 """
 import sys
 import os
@@ -22,13 +23,14 @@ except ImportError:
     pass  # dotenv is optional; env vars can be set another way
 
 from data import fetcher, synthetic
-from strategy import rules
+from strategy import rules, portfolio_selection
 from backtest import engine
 
 
 def main():
     use_synthetic = "--synthetic" in sys.argv
     save_to_supabase = "--save" in sys.argv
+    make_chart = "--chart" in sys.argv
     run_label = None
     if "--label" in sys.argv:
         idx = sys.argv.index("--label")
@@ -44,11 +46,16 @@ def main():
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
-    tickers = cfg["watchlist"]
+    tickers = portfolio_selection.universe_tickers(cfg)
     start = cfg["backtest"]["start_date"]
     end = cfg["backtest"]["end_date"]
 
-    print(f"{'[SYNTHETIC DATA]' if use_synthetic else '[REAL DATA]'} Using {config_path} — {tickers} from {start} to {end}...")
+    ps_enabled = (cfg.get("portfolio_selection") or {}).get("enabled", False)
+    universe_note = (
+        f"{len(tickers)} candidates, target size {cfg['portfolio_selection'].get('target_size')}"
+        if ps_enabled else str(tickers)
+    )
+    print(f"{'[SYNTHETIC DATA]' if use_synthetic else '[REAL DATA]'} Using {config_path} — {universe_note} from {start} to {end}...")
 
     if use_synthetic:
         price_data = synthetic.generate_watchlist(tickers, start, end)
@@ -80,8 +87,36 @@ def main():
         print(f"  {t['ticker']}: {t['entry_date'].date()} @ {t['entry_price']:.2f} -> "
               f"{t['exit_date'].date()} @ {t['exit_price']:.2f}  "
               f"({t['return_pct']:+.2f}%, {t['exit_reason']})")
+        if t.get("entry_log"):
+            print(f"      {t['entry_log']}")
+        if t.get("exit_log"):
+            print(f"      {t['exit_log']}")
     if len(result["trades"]) > 20:
         print(f"  ... and {len(result['trades']) - 20} more")
+
+    blocked = result.get("blocked_signals") or []
+    if blocked:
+        print(f"\n=== CIRCUIT BREAKER ({len(blocked)} signal(s) blocked) ===")
+        for b in blocked[:10]:
+            print(f"  {b['ticker']} on {b['date'].date()}: {b['reason']}")
+        if len(blocked) > 10:
+            print(f"  ... and {len(blocked) - 10} more")
+
+    rebalances = result.get("rebalance_log") or []
+    if rebalances:
+        print(f"\n=== PORTFOLIO SELECTION ({len(rebalances)} rebalance(s)) ===")
+        for r in rebalances:
+            added = f", +{r['added']}" if r["added"] else ""
+            dropped = f", -{r['dropped']}" if r["dropped"] else ""
+            print(f"  {r['date'].date()}: {r['selected']}{added}{dropped}")
+
+    pyramid_adds = result.get("pyramid_log") or []
+    if pyramid_adds:
+        print(f"\n=== PYRAMIDING ({len(pyramid_adds)} unit(s) added) ===")
+        for p in pyramid_adds[:20]:
+            print(f"  {p['date'].date()}: {p['log']}")
+        if len(pyramid_adds) > 20:
+            print(f"  ... and {len(pyramid_adds) - 20} more")
 
     if save_to_supabase:
         from storage.supabase_client import SupabaseStore
@@ -91,6 +126,13 @@ def main():
         if run:
             store.save_trades(result["trades"], source="backtest", backtest_run_id=run["id"])
             print(f"  Saved as backtest_runs.id = {run['id']} ({len(result['trades'])} trades)")
+
+    if make_chart:
+        import report
+        safe_label = (run_label or os.path.splitext(os.path.basename(config_path))[0]).replace(" ", "_")
+        out_path = os.path.join("results", f"{safe_label}_report.html")
+        report.generate_html_report(result, cfg, price_data, run_label or safe_label, out_path)
+        print(f"\nWrote chart report to {out_path}")
 
     return result
 

@@ -1,0 +1,39 @@
+# TEST v5-crisis — same N/ATR-based sizing logic as strategy_v5_n_sizing.yaml,
+# run against 2006-2011 (the runup, the 2007-2009 financial crisis crash,
+# and the early recovery) instead of 2019-2024.
+#
+# This is arguably the most important of the three windows for this
+# specific question: N-based sizing is supposed to shrink position size
+# (and cost) exactly when volatility spikes — which is precisely what
+# happens in a real crash. If it's going to earn its keep anywhere
+# relative to flat-% sizing (strategy_v4_crisis.yaml), it should be here.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  # stop_loss_pct is IGNORED in atr_unit sizing mode — see risk block below.
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2006-01-01"
+  end_date: "2011-12-31"
+  commission_pct: 0.0

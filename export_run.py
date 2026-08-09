@@ -47,11 +47,17 @@ def main():
     csv_path = os.path.join(out_dir, f"{safe_label}_trades.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["ticker", "entry_date", "entry_price", "exit_date", "exit_price", "shares", "pnl", "return_pct", "exit_reason"])
+        writer.writerow([
+            "ticker", "entry_date", "entry_price", "exit_date", "exit_price", "shares",
+            "pnl", "return_pct", "exit_reason", "sizing_method", "initial_risk_dollars",
+            "r_multiple", "entry_log", "exit_log",
+        ])
         for t in trades:
             writer.writerow([
                 t["ticker"], t["entry_date"], t["entry_price"], t["exit_date"],
                 t["exit_price"], t["shares"], t["pnl"], t["return_pct"], t["exit_reason"],
+                t.get("sizing_method"), t.get("initial_risk_dollars"), t.get("r_multiple"),
+                t.get("entry_log"), t.get("exit_log"),
             ])
     print(f"Wrote {len(trades)} trades to {csv_path}")
 

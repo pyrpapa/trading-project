@@ -1,0 +1,83 @@
+# EXPERIMENTAL v11 -- swaps the MA-crossunder trend exit for a
+# Turtle-style Donchian LOW-channel exit. Everything else is copied
+# UNCHANGED from v5 -- same watchlist, same MA-crossover entry, same
+# N/ATR-based sizing -- so this isolates ONE new variable: the exit
+# rule, not entry, not sizing, not the watchlist.
+#
+# Compare directly against v5 on the same window:
+#   python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --save --label "v5-compare"
+#   python run_backtest.py --config config/strategy_v11_donchian_exit.yaml --chart --save --label "v11-donchian-exit"
+#
+# Why this exists (see PROJECT_STATUS.md #22): the user noticed this
+# project's "Best R" has clustered around 6-8R across every config
+# tested this session (v4-v10), well short of the 15R+ outliers Way of
+# the Turtle's own R-multiple charts show. Code review of
+# strategy/rules.py + backtest/engine.py ruled out take_profit_pct
+# (null everywhere) and the stop-loss (fixed at entry, never trails on
+# its own) as the cause, and pointed at the trend-exit rule itself:
+# every config through v10 exits the FIRST day price closes back below
+# its own 20-day moving average -- a much twitchier trigger than the
+# Donchian LOW-channel exit the Turtles actually used (System 1: 10-day
+# low, System 2: 20-day low). A 20-day SMA is a smoothed running
+# average; price dips below its own trailing mean during completely
+# ordinary pullbacks inside an intact uptrend, often well before the
+# market makes any genuine new low. This config tests that hypothesis
+# directly.
+#
+# How the exit works (see strategy/rules.py):
+#   Sell the first day price closes below the lowest Low of the PRIOR
+#   exit_breakout_period days (today's own low excluded, so there's no
+#   lookahead) -- a genuine new short-term low, not a smoothed-average
+#   crossing. 10 days is Turtle System 1's own pairing with a 20-day
+#   entry (the entry rule this config keeps from v5), the closest
+#   apples-to-apples match available.
+#
+# What did NOT change from v5, on purpose:
+#   - entry: still MA-crossover (price closes above its own 20-day MA,
+#     with volume confirmation). entry.ma_period is unrelated to the
+#     new exit rule -- kept identical to v5.
+#   - risk: identical N/ATR sizing settings to v5 (stop-loss is still
+#     the 2N stop; this only changes the TREND exit, not the stop-loss
+#     or take-profit paths, which are unaffected by exit.type).
+#   - watchlist: identical SPY/AAPL/MSFT three tickers, identical
+#     window.
+#
+# If this widens the R-multiple distribution and helps return without
+# blowing out max drawdown, the natural follow-up is combining it with
+# v10's pyramiding (letting an already-larger stack run even further)
+# -- deliberately not done yet, so this result is a clean read on the
+# exit rule alone first.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low        # "ma_crossover" (v1-v10 default) or "donchian_low"
+  exit_breakout_period: 10  # Turtle System 1 -- exit on a new 10-day low
+  stop_loss_pct: 8.0        # ignored in atr_unit sizing mode, same as v5
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  # No pyramiding / correlation_breaker / portfolio_selection blocks --
+  # isolating the exit rule as the one new variable, same discipline as
+  # every other vN config.
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

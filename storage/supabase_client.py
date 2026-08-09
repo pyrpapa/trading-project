@@ -61,6 +61,13 @@ class SupabaseStore:
                 "pnl": float(t["pnl"]),
                 "return_pct": float(t["return_pct"]),
                 "exit_reason": t["exit_reason"],
+                "entry_reason": t.get("entry_reason"),
+                "entry_log": t.get("entry_log"),
+                "exit_reason_detail": t.get("exit_reason_detail"),
+                "exit_log": t.get("exit_log"),
+                "sizing_method": t.get("sizing_method"),
+                "initial_risk_dollars": float(t["initial_risk_dollars"]) if t.get("initial_risk_dollars") is not None else None,
+                "r_multiple": float(t["r_multiple"]) if t.get("r_multiple") is not None else None,
                 "backtest_run_id": backtest_run_id,
             })
         # Batch insert in chunks to avoid oversized requests
@@ -83,24 +90,38 @@ class SupabaseStore:
         result = self.client.table("config_history").insert(row).execute()
         return result.data[0] if result.data else None
 
-    def open_trade(self, ticker: str, entry_date, entry_price: float, shares: float, source: str = "paper") -> dict:
+    def open_trade(
+        self, ticker: str, entry_date, entry_price: float, shares: float, source: str = "paper",
+        entry_reason: str = None, entry_log: str = None,
+        sizing_method: str = None, initial_risk_dollars: float = None,
+    ) -> dict:
         row = {
             "ticker": ticker,
             "source": source,
             "entry_date": str(entry_date.date()) if hasattr(entry_date, "date") else str(entry_date),
             "entry_price": float(entry_price),
             "shares": float(shares),
+            "entry_reason": entry_reason,
+            "entry_log": entry_log,
+            "sizing_method": sizing_method,
+            "initial_risk_dollars": float(initial_risk_dollars) if initial_risk_dollars is not None else None,
         }
         result = self.client.table("trades").insert(row).execute()
         return result.data[0] if result.data else None
 
-    def close_trade(self, trade_id: int, exit_date, exit_price: float, pnl: float, return_pct: float, exit_reason: str) -> dict:
+    def close_trade(
+        self, trade_id: int, exit_date, exit_price: float, pnl: float, return_pct: float, exit_reason: str,
+        exit_reason_detail: str = None, exit_log: str = None, r_multiple: float = None,
+    ) -> dict:
         row = {
             "exit_date": str(exit_date.date()) if hasattr(exit_date, "date") else str(exit_date),
             "exit_price": float(exit_price),
             "pnl": float(pnl),
             "return_pct": float(return_pct),
             "exit_reason": exit_reason,
+            "exit_reason_detail": exit_reason_detail,
+            "exit_log": exit_log,
+            "r_multiple": float(r_multiple) if r_multiple is not None else None,
         }
         result = self.client.table("trades").update(row).eq("id", trade_id).execute()
         return result.data[0] if result.data else None
