@@ -1,22 +1,17 @@
 name: Daily trading check
 
 on:
-  # Automatic daily schedule is DISABLED for now — uncomment the two
-  # lines below when you're ready to let this run on its own. Until
-  # then, it only runs when you manually trigger it from the Actions
-  # tab (workflow_dispatch), so pushing this repo won't cause anything
-  # to run on its own.
-  # schedule:
-  #   # 20:30 UTC ≈ 4:30pm ET (after market close at 4pm ET).
-  #   # UTC offset shifts with US daylight saving — during EST (winter)
-  #   # this runs at 3:30pm ET instead. Adjust if that matters to you.
-  #   - cron: "30 20 * * 1-5"
+  schedule:
+    # 20:30 UTC ≈ 4:30pm ET (after market close at 4pm ET).
+    # UTC offset shifts with US daylight saving — during EST (winter)
+    # this runs at 3:30pm ET instead. Adjust if that matters to you.
+    - cron: "30 20 * * 1-5"
   workflow_dispatch:
     inputs:
       strategy_config:
         description: "Path to strategy config file"
         required: false
-        default: "config/strategy.yaml"
+        default: "config/strategy_master.yaml"
 
 jobs:
   run-live-check:
@@ -38,7 +33,7 @@ jobs:
           ALPACA_PAPER: "true"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          STRATEGY_CONFIG: ${{ inputs.strategy_config || 'config/strategy.yaml' }}
+          STRATEGY_CONFIG: ${{ inputs.strategy_config || 'config/strategy_master.yaml' }}
         run: python live/run_live.py
 
       - name: Upload log on failure

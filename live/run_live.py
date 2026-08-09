@@ -11,7 +11,7 @@ so the day's full price/volume data is available. Schedule it with cron,
 a systemd timer, or GitHub Actions — see README for examples.
 
 Usage:
-    python live/run_live.py                                   # run for real (paper account), config/strategy.yaml
+    python live/run_live.py                                   # run for real (paper account), config/strategy_master.yaml
     python live/run_live.py --dry-run                          # show what it WOULD do, place no orders
     python live/run_live.py --config config/strategy_v4.yaml   # use a different strategy config file
 """
@@ -61,7 +61,7 @@ def _stop_price_for_open_position(store, ticker, entry_price, qty, sizing_method
 def main():
     dry_run = "--dry-run" in sys.argv
 
-    cfg_path = os.environ.get("STRATEGY_CONFIG", os.path.join(os.path.dirname(__file__), "..", "config", "strategy.yaml"))
+    cfg_path = os.environ.get("STRATEGY_CONFIG", os.path.join(os.path.dirname(__file__), "..", "config", "strategy_master.yaml"))
     if "--config" in sys.argv:
         idx = sys.argv.index("--config")
         if idx + 1 < len(sys.argv):
