@@ -18,9 +18,23 @@ number in that file, this doc explains what it actually does.
 | Results storage | Supabase (`backtest_runs`, `trades`, `signals`, `account_snapshots`) |
 | Results viewer | `dashboard/` (currently **read-only** — see Section 6) |
 
-**You should only ever need to edit `config/strategy.yaml`.** The
+**You should only ever need to edit a `config/*.yaml` file.** The
 `.py` files contain the logic that reads that config — you shouldn't
 need to touch them to change how the strategy behaves.
+
+Both `run_backtest.py` and `live/run_live.py` default to
+`config/strategy.yaml`, but both accept a different file so you can
+switch strategies without renaming anything:
+
+```powershell
+python run_backtest.py --config config/strategy_v4.yaml
+python live/run_live.py --dry-run --config config/strategy_v4.yaml
+```
+
+`live/run_live.py` also honors a `STRATEGY_CONFIG` environment
+variable (same effect as `--config`, useful for the GitHub Actions
+workflow — see Section 5). `--config` on the command line wins if
+both are set.
 
 ---
 
@@ -150,6 +164,13 @@ by accident.
 ---
 
 ## 5. A day in the life of the live runner
+
+The GitHub Actions workflow (`workflow_dispatch`) has a
+`strategy_config` input — leave it as `config/strategy.yaml` or point
+it at any other file in `config/` (e.g. `config/strategy_v4.yaml`) for
+that run, no code or secrets change needed. It defaults to
+`config/strategy.yaml` if left blank, including on the (currently
+disabled) scheduled runs.
 
 Each time `live/run_live.py` runs (once daily via GitHub Actions):
 
