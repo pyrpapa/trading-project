@@ -61,4 +61,27 @@ def fetch(ticker: str, start: str, end: str, force_refresh: bool = False, namesp
         raise RuntimeError(f"No data returned for {ticker}. Check the ticker symbol.")
 
     # yfinance sometimes returns multi-index columns; flatten if so
-    if isinstance(df.columns,
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df[["Open", "High", "Low", "Close", "Volume"]]
+    df.to_csv(path)
+    return df.loc[start:end]
+
+
+def fetch_watchlist(tickers: list, start: str, end: str) -> dict:
+    """Returns {ticker: DataFrame} for every ticker in the watchlist."""
+    return {t: fetch(t, start, end) for t in tickers}
+
+
+if __name__ == "__main__":
+    # Manual run: populate the cache for the default watchlist
+    import yaml
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config", "strategy.yaml")
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+
+    for ticker in cfg["watchlist"]:
+        print(f"Fetching {ticker}...")
+        df = fetch(ticker, cfg["backtest"]["start_date"], cfg["backtest"]["end_date"], force_refresh=True)
+        print(f"  {len(df)} rows cached to {_cache_path(ticker, 'default')}")
