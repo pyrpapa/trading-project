@@ -28,12 +28,24 @@ def fetch(ticker: str, start: str, end: str, force_refresh: bool = False, namesp
     `namespace` keeps caches separate for different use cases (e.g. a
     long backtest history cache vs. a short rolling live-check cache)
     so one doesn't overwrite the other.
+
+    The cache is only used if it actually covers the requested date
+    range — a cache built for 2019-2024 won't be silently reused (and
+    silently sliced to empty) for a 2012-2018 request. It refetches
+    automatically if the cached range doesn't cover what's asked for.
     """
     path = _cache_path(ticker, namespace)
 
     if not force_refresh and os.path.exists(path):
         df = pd.read_csv(path, index_col=0, parse_dates=True)
-        return df.loc[start:end]
+        cache_covers_range = (
+            not df.empty
+            and df.index.min() <= pd.Timestamp(start)
+            and df.index.max() >= pd.Timestamp(end)
+        )
+        if cache_covers_range:
+            return df.loc[start:end]
+        # else: fall through and refetch — cache exists but doesn't cover this range
 
     try:
         import yfinance as yf

@@ -138,3 +138,24 @@ class SupabaseStore:
             .execute()
         )
         return result.data
+
+    def get_run_by_label(self, label: str) -> dict:
+        result = (
+            self.client.table("backtest_runs")
+            .select("*")
+            .eq("run_label", label)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def get_trades_for_run(self, backtest_run_id: int) -> list:
+        result = (
+            self.client.table("trades")
+            .select("*")
+            .eq("backtest_run_id", backtest_run_id)
+            .order("entry_date", desc=False)
+            .execute()
+        )
+        return result.data

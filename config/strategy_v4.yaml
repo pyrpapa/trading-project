@@ -1,0 +1,29 @@
+# TEST v4 — same 3 tickers as base, but bigger per-position cap, to
+# test directly whether the "idle cash" problem was the main drag on
+# v1's returns (isolates the risk-sizing variable instead of the
+# watchlist variable).
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  max_position_pct: 20.0    # up from 5.0 in base config
+  max_invested_pct: 60.0    # unchanged
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

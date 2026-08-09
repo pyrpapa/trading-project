@@ -1,0 +1,31 @@
+# TEST v2 — more large-cap tech tickers (same "flavor" as base watchlist,
+# tests whether more buy opportunities alone increases returns).
+# Everything except watchlist is unchanged from config/strategy.yaml.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - NVDA
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  max_position_pct: 5.0
+  max_invested_pct: 60.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

@@ -1,0 +1,31 @@
+# TEST v4-crisis — same v4 logic (bigger position cap) but run against
+# 2006-2011, which includes the runup, the 2007-2009 financial crisis
+# crash, and the early recovery. This is arguably the real test of a
+# trend-following + stop-loss system: it's specifically designed to
+# get you OUT before a crash does its worst damage, which neither of
+# the previous two (bull-market) windows could show.
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2006-01-01"
+  end_date: "2011-12-31"
+  commission_pct: 0.0
