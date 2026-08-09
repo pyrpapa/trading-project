@@ -165,14 +165,40 @@ by accident.
 
 ## 5. A day in the life of the live runner
 
-The GitHub Actions workflow (`workflow_dispatch`) has a
-`strategy_config` input — leave it as `config/strategy.yaml` or point
-it at any other file in `config/` (e.g. `config/strategy_v4.yaml`) for
-that run, no code or secrets change needed. It defaults to
-`config/strategy.yaml` if left blank, including on the (currently
-disabled) scheduled runs.
+The GitHub Actions workflow **runs automatically every weekday at
+20:30 UTC** (~4:30pm ET, 30 minutes after market close), via the
+`schedule` trigger in `.github/workflows/daily-trading-check.yml` —
+enabled 2026-08-09. It also has a `workflow_dispatch` input,
+`strategy_config`, for manually triggering an off-schedule run against
+a specific config file from the Actions tab. Both the schedule and a
+manual run with the input left blank default to
+`config/strategy_master.yaml` — the config actually intended for real
+use (see its own header for the full reasoning/lineage). Point
+`strategy_config` at any other file in `config/` to test something
+else without touching the workflow file or secrets.
 
-Each time `live/run_live.py` runs (once daily via GitHub Actions):
+**Daylight-saving caveat**: the cron time is fixed in UTC, but market
+close (4pm) is fixed in ET, and ET shifts relative to UTC twice a year.
+20:30 UTC is 4:30pm ET during daylight saving (roughly March–November)
+but only **3:30pm ET during standard time** (roughly November–March) —
+30 minutes *before* the close, not after. Revisit the cron expression
+before DST ends if that matters to you; it isn't currently DST-aware.
+
+**Backtest vs. live execution price — a real gap, not just theoretical
+slippage.** The backtest assumes every trade fills at the exact closing
+price that triggered the signal, same day. Live orders don't get that:
+`broker/alpaca_client.py` submits a plain market order with
+`time_in_force=DAY` and no extended-hours flag. Submitted at ~4:30pm
+ET — after the session has already closed — that order does **not**
+fill today. Alpaca queues it and fills it at the **next trading day's
+market open** instead. So every real trade this system places will
+fill at a different price than the one that triggered it — usually a
+small gap for liquid names like these, but a genuine, currently
+unmodeled source of backtest-vs-live divergence. Signal timing (buy/sell
+decisions) matches the backtest exactly; execution price does not.
+
+Each time `live/run_live.py` runs (once daily, whether via the schedule
+or triggered manually):
 
 1. **Check open positions for exits.** For each ticker currently held,
    compare today's price to your entry price. If down `stop_loss_pct`%
