@@ -12,6 +12,7 @@ Usage:
 """
 import sys
 import os
+import datetime as dt
 import yaml
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -55,12 +56,34 @@ def main():
         f"{len(tickers)} candidates, target size {cfg['portfolio_selection'].get('target_size')}"
         if ps_enabled else str(tickers)
     )
-    print(f"{'[SYNTHETIC DATA]' if use_synthetic else '[REAL DATA]'} Using {config_path} — {universe_note} from {start} to {end}...")
+    # Fetch extra history BEFORE start_date so every rolling window (MA,
+    # volume MA, ATR, Donchian breakout/exit, portfolio-selection
+    # liquidity+correlation, correlation circuit breaker) already has a
+    # full lookback's worth of real data by the first simulated day,
+    # instead of warming up DURING the backtest period itself. Without
+    # this, portfolio_selection configs in particular start with an EMPTY
+    # active set for the first ~lookback_period trading days (see
+    # strategy_v7_portfolio_selection.yaml's "known startup quirk") --
+    # same fix pattern already used in live/run_live.py, just applied to
+    # the backtest fetch too so the two stay consistent.
+    corr_cfg = cfg.get("risk", {}).get("correlation_breaker") or {}
+    lookback_days = max(
+        cfg["entry"]["ma_period"], cfg["entry"]["volume_ma_period"],
+        cfg["entry"].get("breakout_period", 0),
+        cfg.get("exit", {}).get("exit_breakout_period", 0),
+        cfg.get("risk", {}).get("atr_period", 20),
+        cfg["portfolio_selection"].get("lookback_period", 0) if ps_enabled else 0,
+        corr_cfg.get("lookback_period", 0) if corr_cfg.get("enabled") else 0,
+    ) + 30
+    fetch_start = (dt.date.fromisoformat(start) - dt.timedelta(days=lookback_days * 2)).isoformat()  # *2 for weekends/holidays
+
+    print(f"{'[SYNTHETIC DATA]' if use_synthetic else '[REAL DATA]'} Using {config_path} — {universe_note} "
+          f"from {start} to {end} (fetching from {fetch_start} for {lookback_days}-trading-day warm-up)...")
 
     if use_synthetic:
-        price_data = synthetic.generate_watchlist(tickers, start, end)
+        price_data = synthetic.generate_watchlist(tickers, fetch_start, end)
     else:
-        price_data = fetcher.fetch_watchlist(tickers, start, end)
+        price_data = fetcher.fetch_watchlist(tickers, fetch_start, end)
 
     # Fail fast with a clear message instead of a cryptic crash deep in
     # the backtest engine if any ticker came back with no usable data
@@ -131,7 +154,12 @@ def main():
         import report
         safe_label = (run_label or os.path.splitext(os.path.basename(config_path))[0]).replace(" ", "_")
         out_path = os.path.join("results", f"{safe_label}_report.html")
-        report.generate_html_report(result, cfg, price_data, run_label or safe_label, out_path)
+        # Trim off the pre-start_date warm-up buffer for the chart only --
+        # the engine needs it for indicator lookback, but the chart should
+        # show the actual requested period, not the extra history fetched
+        # to warm it up.
+        chart_price_data = {t: df.loc[start:end] for t, df in price_data.items()}
+        report.generate_html_report(result, cfg, chart_price_data, run_label or safe_label, out_path)
         print(f"\nWrote chart report to {out_path}")
 
     return result

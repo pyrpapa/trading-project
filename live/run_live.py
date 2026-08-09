@@ -116,8 +116,10 @@ def main():
     lookback_days = max(
         cfg["entry"]["ma_period"], cfg["entry"]["volume_ma_period"],
         cfg["entry"].get("breakout_period", 0),
+        cfg.get("exit", {}).get("exit_breakout_period", 0),
         cfg["risk"].get("atr_period", 20),
         ps_lookback if ps_enabled else 0,
+        corr_lookback if correlation_enabled else 0,
     ) + 30
     start = (dt.date.today() - dt.timedelta(days=lookback_days * 2)).isoformat()  # *2 for weekends/holidays
     end = dt.date.today().isoformat()

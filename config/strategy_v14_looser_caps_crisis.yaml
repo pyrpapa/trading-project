@@ -1,0 +1,47 @@
+# v14, run against 2006-2011 (runup, 2007-2009 crash, early recovery)
+# instead of 2019-2024 -- the stress test for the looser
+# max_position_pct/max_invested_pct caps in strategy_v14_looser_caps.yaml.
+# See that file's header for why this comparison matters: bigger allowed
+# positions/pyramid stacks amplify both the upside AND the drawdown, and
+# v4's own -20.6% crisis-window drawdown (at the ORIGINAL 20%/60% caps,
+# no pyramiding, no Donchian exit) is the baseline reminder of how much
+# worse a real crash is than 2019-2024's calm trend.
+#
+# Compare against v12-crisis on the same window:
+#   python run_backtest.py --config config/strategy_v12_pyramid_donchian_exit_crisis.yaml --chart --save --label "v12-crisis"
+#   python run_backtest.py --config config/strategy_v14_looser_caps_crisis.yaml --chart --save --label "v14-crisis"
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2006-01-01"
+  end_date: "2011-12-31"
+  commission_pct: 0.0

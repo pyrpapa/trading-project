@@ -92,8 +92,17 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     ps_lookback = ps_cfg.get("lookback_period", 90)
     ps_rebalance_months = ps_cfg.get("rebalance_frequency_months", 3)
 
-    # Union of all trading dates across tickers
+    # Union of all trading dates across tickers, restricted to the actual
+    # requested backtest window. price_data itself may contain extra
+    # history BEFORE start_date (see run_backtest.py) so rolling indicators
+    # (MA/ATR/Donchian) and portfolio-selection's liquidity/correlation
+    # lookback already have a full window by day one of the simulation
+    # instead of warming up during it -- but the simulation (trades, equity
+    # curve, rebalances) should only actually run over the configured
+    # period, not the warm-up buffer.
+    sim_start = pd.Timestamp(cfg["backtest"]["start_date"])
     all_dates = sorted(set.union(*[set(df.index) for df in price_data.values()]))
+    all_dates = [d for d in all_dates if d >= sim_start]
 
     cash = starting_cash
     open_positions = {}  # ticker -> list[Position] (a "stack" -- len 1 unless pyramiding)

@@ -1,0 +1,72 @@
+# EXPERIMENTAL v15 -- master_strategy (ATR-unit sizing, pyramiding,
+# Donchian-low exit, 35%/80% caps) applied to a larger FIXED watchlist
+# spanning multiple sectors, instead of just SPY/AAPL/MSFT.
+#
+# This is a deliberately narrower test than v7/v9/v13's
+# portfolio_selection: those swapped to a DIFFERENT mechanism entirely
+# (algorithmic subset-selection out of a 14-name candidate pool,
+# including bonds/gold/utilities) and consistently underperformed the
+# fixed 3-ticker configs -- but that conflates two separate questions:
+#   1. Does diversifying AWAY from equities into other asset classes hurt?
+#      (already answered: yes, likely because the MA-crossover/volume
+#      entry rule doesn't fire cleanly on bonds/gold -- see v3, and the
+#      header of strategy_v7_portfolio_selection.yaml)
+#   2. Does diversifying WITHIN equities -- more sectors, still
+#      trend-followable, same entry/exit logic -- help or hurt?
+#      (untested until now)
+#
+# v15 isolates question 2 specifically: same master_strategy formula,
+# same entry/exit rule, same risk caps -- just a bigger FIXED watchlist
+# (no algorithmic rebalancing/selection) spanning 6 sectors instead of
+# "index + 2 of that index's largest holdings." Ticker list reuses the
+# same liquid, vetted names from strategy_v7_portfolio_selection.yaml's
+# candidate_universe, minus the 4 non-equity tickers (TLT/GLD/XLU/VNQ) --
+# no new tickers introduced, just filtered down to "still equities."
+#
+# Compare against master_strategy on both windows:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v15_diversified_watchlist.yaml --chart --save --label "v15-2019-2024"
+#   python run_backtest.py --config config/strategy_v14_looser_caps_crisis.yaml --chart --save --label "master-crisis-compare"
+#   python run_backtest.py --config config/strategy_v15_diversified_watchlist_crisis.yaml --chart --save --label "v15-crisis"
+
+watchlist:
+  - SPY    # broad market index
+  - AAPL   # tech
+  - MSFT   # tech
+  - GOOGL  # tech
+  - AMZN   # consumer/tech
+  - JPM    # financials
+  - JNJ    # healthcare
+  - XOM    # energy
+  - CAT    # industrials
+  - PG     # consumer staples
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

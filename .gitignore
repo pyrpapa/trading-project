@@ -3,3 +3,15 @@ data/cache/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Generated backtest artifacts (HTML chart reports, CSV/markdown exports).
+# These are fully regeneratable from a config file + `python run_backtest.py
+# --config ... --chart --save --label ...`, and the durable copy already
+# lives in Supabase (backtest_runs/trades tables) via --save -- committing
+# them here just bloats the repo with derived data. Local files stay on
+# disk, just untracked.
+results/*.html
+results/*_summary.md
+results/*_trades.csv
+/*_summary.md
+/*_trades.csv

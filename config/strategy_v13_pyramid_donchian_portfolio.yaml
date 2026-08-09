@@ -1,0 +1,96 @@
+# EXPERIMENTAL v13 -- v12 (pyramiding + Donchian-low exit, on ATR-unit
+# sizing) combined with v7's portfolio selection instead of a fixed
+# SPY/AAPL/MSFT watchlist. Two questions this isolates:
+#   1. Does letting the algorithm choose a genuinely diversified 3-ticker
+#      set (instead of always trading the same 3 correlated names) change
+#      how well pyramiding + a slower Donchian exit perform?
+#   2. Does combining portfolio selection with the "let winners run
+#      further" mechanics (pyramiding, Donchian exit) recover some of the
+#      upside v7 gave up for its lower drawdown, compared to v7's plain
+#      MA-crossover/flat-N-sizing baseline?
+#
+# Compare directly against v7 (portfolio selection, no pyramiding/Donchian
+# exit) and v12 (pyramiding/Donchian exit, fixed watchlist) on the same
+# window:
+#   python run_backtest.py --config config/strategy_v7_portfolio_selection.yaml --chart --save --label "v7-compare"
+#   python run_backtest.py --config config/strategy_v12_pyramid_donchian_exit.yaml --chart --save --label "v12-compare"
+#   python run_backtest.py --config config/strategy_v13_pyramid_donchian_portfolio.yaml --chart --save --label "v13-pyramid-donchian-portfolio"
+#
+# What did NOT change from v12, on purpose:
+#   - entry: still MA-crossover with volume confirmation.
+#   - exit: Donchian-low (10-day), ma_exit gate unchanged.
+#   - risk sizing: ATR-unit sizing, pyramiding (0.5N adds, 4-unit cap),
+#     same position caps.
+#
+# What did NOT change from v7, on purpose:
+#   - candidate_universe, target_size, liquidity filter, quarterly
+#     rebalance -- identical selection logic and thresholds.
+#
+# No new code was needed -- risk.pyramiding, exit.type, and
+# portfolio_selection are all independent blocks in backtest/engine.py,
+# same as every other vN combination in this project.
+#
+# NOTE on the warm-up fix: earlier versions of portfolio_selection had a
+# known quirk where the very first rebalance had no trailing history, so
+# the active set started EMPTY for roughly the first couple of quarters.
+# That's now fixed at the run_backtest.py/engine.py level (extra history
+# is fetched before start_date so every lookback window -- MA, ATR,
+# Donchian, portfolio-selection liquidity/correlation -- is already full
+# by day one of the actual backtest period) rather than something this
+# config needs to work around.
+
+watchlist: []
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low        # from v11/v12
+  exit_breakout_period: 10  # Turtle System 1 -- exit on a new 10-day low
+  stop_loss_pct: 8.0         # ignored in atr_unit sizing mode, same as v5/v12
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0
+  max_invested_pct: 60.0
+  pyramiding:                # from v10/v12
+    enabled: true
+    unit_interval_n: 0.5     # add a unit every 0.5N further in your favor (Turtle default)
+    max_units: 4              # cap the stack at 4 units total (Turtle default)
+  # No correlation_breaker block -- portfolio selection (below) is the
+  # diversification mechanism here, same choice v7/v9 made.
+
+portfolio_selection:          # from v7
+  enabled: true
+  candidate_universe:
+    - SPY    # broad market index
+    - AAPL   # tech
+    - MSFT   # tech
+    - GOOGL  # tech
+    - AMZN   # consumer/tech
+    - JPM    # financials
+    - JNJ    # healthcare
+    - XOM    # energy
+    - CAT    # industrials
+    - PG     # consumer staples
+    - TLT    # long-term treasury bonds
+    - GLD    # gold
+    - XLU    # utilities (defensive/low-beta)
+    - VNQ    # REITs
+  target_size: 3
+  min_avg_dollar_volume: 20000000   # $20M/day trailing average
+  lookback_period: 90               # trading days for liquidity + correlation checks
+  rebalance_frequency_months: 3     # quarterly
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

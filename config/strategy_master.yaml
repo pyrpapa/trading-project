@@ -1,0 +1,106 @@
+# MASTER STRATEGY -- the current best-tested config in this project, and
+# the one intended to actually run against Alpaca (paper first). Kept as
+# its own named file so "which config is live" doesn't depend on
+# remembering a version number. If a future version beats this one, copy
+# IT here the same way and update this header -- don't let two files
+# silently diverge.
+#
+# Lineage (each step isolated ONE variable, see the corresponding vN
+# file's header for the full reasoning):
+#   v1 base (flat 5% position cap)              ->  2.5%/yr,  -2.5% DD
+#   v4  (flat cap raised to 20%)                 ->  9.9%/yr,  -9.6% DD
+#   v5  (ATR/N-based position sizing)            ->  9.5%/yr,  -7.6% DD, better SQN
+#   v10 (+ pyramiding into winners)              ->  9.9%/yr,  -8.5% DD, best SQN of that round (4.37)
+#   v11 (+ Donchian-low exit instead of MA exit) ->  9.6%/yr,  -9.7% DD, bigger avg R-multiple
+#   v12 (pyramiding + Donchian exit together)    -> 10.65%/yr, -9.95% DD  (2019-2024)
+#   v14 (+ looser max_position_pct/              -> 16.48%/yr, -13.22% DD (2019-2024)
+#       max_invested_pct: 20%->35%, 60%->80%)        7.88%/yr, -23.91% DD (2006-2011 crisis)
+#   v16/master (+ NVDA added to the watchlist)   -> 28.13%/yr, -15.50% DD (2019-2024)
+#                                                    11.45%/yr, -29.76% DD (2006-2011 crisis)
+#
+# WHY the caps got loosened (v14): checked v12's actual trade log
+# directly rather than guessing -- 108 of 140 trades (77%) were sized
+# BELOW what the "risk 1% of equity per unit" ATR formula intended,
+# because max_position_pct or max_invested_pct/cash was cutting the
+# position down first (50 trades hit the position cap, 58 hit the
+# invested-total cap -- roughly even, so both needed raising).
+#
+# WHY NVDA got added (v16): after v15 showed a BLANKET 10-ticker,
+# 6-sector expansion made everything worse (more whipsaw, diluted
+# pyramiding, deeper crisis drawdown -- see strategy_v15_diversified_watchlist.yaml),
+# tested ONE deliberately-picked name instead: semiconductors/AI, a
+# genuinely different business driver than AAPL (hardware) or MSFT
+# (software/cloud) despite the shared "tech" label. Unlike Costco (v17,
+# tested alongside NVDA and REJECTED -- looked great in the calm window,
+# 27.66%/yr, but fell apart in the crisis window at 6.33%/yr and -37.23%
+# DD, the worst of anything tested in this project), NVDA held up in
+# BOTH windows: return and SQN both improved in the calm window AND the
+# crisis window, not just one. That's the bar for "real edge" vs.
+# "bull-market artifact" this project has used throughout.
+#
+# THE HONEST TRADEOFF: this is not a free upgrade, and NVDA specifically
+# is far more volatile than the other three names (bigger ATR, so the
+# atr_unit sizing formula auto-sizes it smaller per unit for the same 1%
+# risk budget -- worth watching in the trade log). Every "let it hold
+# more" lever tested in this project increased both return AND drawdown
+# together, and that pattern continues here: crisis-window max drawdown
+# is now -29.76%, deeper than v14's already-elevated -23.91%. Know that
+# number and be genuinely comfortable with it before running this for
+# real -- see config/strategy_v16_add_nvda_crisis.yaml for that run, and
+# STRATEGY_GUIDE.md Section 7's checklist.
+#
+# SCALE: this strategy's position sizing is entirely percentage-of-equity
+# based (max_position_pct, max_invested_pct, risk_pct_per_unit all
+# operate on CURRENT account equity, not a fixed dollar figure), and
+# Alpaca orders are submitted as notional (dollar-amount) orders, which
+# support fractional shares on all four of these tickers. Verified this
+# directly on the pre-NVDA (3-ticker) version at starting_cash of
+# $100,000, $10,000, $2,000, and $500 -- identical percentage returns at
+# every size -- a smaller real account does not, by itself, cap this
+# strategy's return potential.
+#
+# Compare against v14 (before NVDA) and v12 (before the cap change) on
+# the same window:
+#   python run_backtest.py --config config/strategy_v12_pyramid_donchian_exit.yaml --chart --save --label "v12-compare"
+#   python run_backtest.py --config config/strategy_v14_looser_caps.yaml --chart --save --label "v14-compare"
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#
+# To actually run this against Alpaca paper trading:
+#   python live/run_live.py --dry-run --config config/strategy_master.yaml
+#   python live/run_live.py --config config/strategy_master.yaml
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+  - NVDA
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0     # up from 20.0 -- see header note
+  max_invested_pct: 80.0     # up from 60.0 -- see header note
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

@@ -1,0 +1,76 @@
+# EXPERIMENTAL v14 -- v12 (pyramiding + Donchian-low exit, ATR-unit
+# sizing) with max_position_pct/max_invested_pct loosened, testing
+# whether the position-sizing CEILING (not the ATR-risk formula itself)
+# was the binding constraint on v12's returns.
+#
+# Measured directly against v12's actual trade log (140 trades,
+# 2019-2024): 108 of 140 trades (77%) were sized BELOW the intended
+# "risk 1% of equity" ATR formula -- meaning max_position_pct (20%) or
+# max_invested_pct (60%)/available cash was cutting the position down
+# before the ATR math got to decide, most of the time. Of those 108
+# capped trades, 50 were bound by max_position_pct specifically and 58
+# by max_invested_pct/cash -- roughly even, so loosening only one of
+# the two would still leave the other binding on ~40% of trades.
+#
+# max_position_pct: 20.0 -> 35.0
+# max_invested_pct: 60.0 -> 80.0 (still leaves a 20% cash buffer, not
+# fully uncapped -- an intentionally chosen middle ground, not the
+# ATR formula running completely unconstrained)
+#
+# Nothing else changed from v12 -- same watchlist, same MA-crossover
+# entry, same Donchian-low exit, same ATR sizing formula and pyramiding
+# settings. This isolates ONE new variable: how much of v12's return was
+# left on the table by caps that were binding most of the time, versus
+# what the ATR-risk formula would have sized on its own.
+#
+# IMPORTANT RISK NOTE, not just a return question: bigger allowed
+# positions/pyramid stacks means bigger portfolio-level swings both ways.
+# Every prior "let it hold more" lever tested in this project (flat 5%->
+# 20% cap between v1 and v4, ATR-sizing, pyramiding) increased drawdown
+# alongside return, and v4's OWN 20%-cap config already showed a -20.6%
+# max drawdown in the 2006-2011 crisis window at the ORIGINAL caps -- see
+# config/strategy_v4_crisis.yaml. Loosening the caps further on a
+# formula that ALSO pyramids into winners and holds losers longer via
+# the Donchian exit is exactly the kind of change that could look great
+# in a calm bull run (2019-2024) and much worse in a real crash. Compare
+# both windows before drawing conclusions -- see
+# config/strategy_v14_looser_caps_crisis.yaml.
+#
+# Compare against v12 on the same window:
+#   python run_backtest.py --config config/strategy_v12_pyramid_donchian_exit.yaml --chart --save --label "v12-compare"
+#   python run_backtest.py --config config/strategy_v14_looser_caps.yaml --chart --save --label "v14-looser-caps"
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0     # up from 20.0 -- see header note
+  max_invested_pct: 80.0     # up from 60.0 -- see header note
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
