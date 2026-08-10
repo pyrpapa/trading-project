@@ -1,0 +1,86 @@
+# EXPERIMENTAL v18 -- a genuinely different philosophy from every prior
+# vN config: BREADTH over concentration. Many small, independent bets
+# across a wide, sector-diverse universe of 22 equities, instead of a
+# few big pyramided positions in 3-4 correlated names.
+#
+# This is NOT a repeat of v15 (which also widened the watchlist but kept
+# v14's big per-trade sizing -- 35% position cap, 1% risk per unit --
+# causing whipsaw and diluted pyramiding when 10 correlated-ish names
+# competed for the same capped exposure). v18 changes the SIZING
+# philosophy too, not just the ticker count:
+#   risk_pct_per_unit:  1.0 -> 0.35   (much less risked per single trade)
+#   max_position_pct:  35.0 -> 10.0   (no single name/stack can dominate)
+#   max_invested_pct:  unchanged at 80.0 -- with smaller per-position
+#     caps, the portfolio can hold many small positions at once and
+#     still use most of that 80% budget, rather than 2-3 big ones.
+#   pyramiding: unchanged (0.5N interval, 4-unit cap) -- still lets a
+#     genuine winner compound, just from a much smaller starting unit.
+#
+# Ticker universe: 22 large-cap equities (all confirmed to have price
+# history back to 2006, so this can be crisis-tested like everything
+# else in this project), spanning index/tech/financials/healthcare/
+# energy/industrials/staples/retail/telecom/media -- broader and more
+# sector-diverse than v7/v9/v13's 14-name candidate_universe. FIXED
+# watchlist, not portfolio_selection -- all 22 are always eligible,
+# rather than algorithmically narrowed to 3. The whole point here is
+# breadth, not a curated small subset.
+#
+# Compare against master_strategy (concentration) on both windows:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v18_breadth_small_bets.yaml --chart --save --label "v18-breadth"
+#   python run_backtest.py --config config/strategy_v14_looser_caps_crisis.yaml --chart --save --label "master-crisis-compare"
+#   python run_backtest.py --config config/strategy_v18_breadth_small_bets_crisis.yaml --chart --save --label "v18-breadth-crisis"
+
+watchlist:
+  - SPY    # broad market index
+  - AAPL   # tech
+  - MSFT   # tech
+  - GOOGL  # tech
+  - AMZN   # consumer/tech
+  - NVDA   # semiconductors/AI
+  - JPM    # financials
+  - JNJ    # healthcare
+  - PFE    # healthcare
+  - MRK    # healthcare
+  - XOM    # energy
+  - CVX    # energy
+  - CAT    # industrials
+  - PG     # consumer staples
+  - COST   # consumer staples/retail
+  - KO     # consumer staples
+  - PEP    # consumer staples
+  - WMT    # retail
+  - HD     # retail
+  - VZ     # telecom
+  - T      # telecom
+  - DIS    # media/entertainment
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 0.35    # down from 1.0 -- the core "smaller trades" lever
+  stop_atr_multiple: 2.0
+  max_position_pct: 10.0     # down from 35.0 -- no single name/stack can dominate
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
