@@ -1,0 +1,60 @@
+# EXPERIMENTAL v22 -- master_strategy's exact signal (entry/exit/sizing/
+# pyramiding, byte-identical) applied to 3x leveraged ETF proxies
+# instead of the underlying stocks/index:
+#   SPY  -> SPXL (3x S&P 500)
+#   AAPL/MSFT -> TQQQ (3x Nasdaq-100 -- broad mega-cap tech, the same
+#                "flavor" AAPL/MSFT represent, just index-wrapped)
+#   NVDA -> SOXL (3x semiconductors -- NVDA's own sector, leveraged)
+#
+# WHY NO CRISIS-WINDOW VARIANT: checked data depth directly before
+# building this -- SPXL only goes back to 2008-11-05 (misses most of
+# the 2007-2009 crash), TQQQ to 2010-02-11, SOXL to 2010-03-11. None of
+# them cover 2006-2011 at all. Every other config in this project has
+# been validated against BOTH windows before being trusted -- this one
+# structurally can't be, because leveraged products are too recent to
+# have existed through a real historical crash. Treat this result with
+# less confidence than master_strategy accordingly: it's only ever been
+# tested in a calm/bull regime, and leveraged ETFs are specifically
+# where a real crash would be expected to hurt disproportionately
+# (daily-reset leverage compounds losses on the way down just as it
+# compounds gains on the way up, plus volatility decay during any
+# choppy/sideways stretch within the drawdown).
+#
+# Compare against master_strategy on the same window:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v22_leveraged_etfs.yaml --chart --save --label "v22-leveraged-etfs"
+
+watchlist:
+  - SPXL
+  - TQQQ
+  - SOXL
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
