@@ -1,0 +1,63 @@
+# EXPERIMENTAL v19 -- "let it ride": tests whether the exit/pyramiding
+# tightness itself is what's causing master_strategy to lag buy-and-hold
+# on its own winners (see the buy-and-hold comparison: 28.13%/yr active
+# vs 54.51%/yr just holding the same 4 tickers, 2019-2024). Every prior
+# config in this project used the SAME stop_atr_multiple (2.0),
+# exit_breakout_period (10), and pyramiding pace (0.5N/4 units) --
+# never varied. This bundles several "ride winners harder, get stopped
+# out less" changes together as one deliberate high-conviction
+# experiment (same discipline v12 used bundling pyramid+Donchian exit):
+#
+#   stop_atr_multiple:   2.0 -> 3.0   (wider stop -- survive normal pullbacks)
+#   exit_breakout_period: 10 -> 20    (Turtle System 2 -- needs a genuine
+#                                       20-day low to exit, not just a 10-day one)
+#   pyramid unit_interval_n: 0.5 -> 0.3  (add units faster into a winner)
+#   pyramid max_units:   4 -> 6       (let a real winner compound further)
+#   risk_pct_per_unit:   1.0 -> 1.5   (bigger bet per unit -- explicit
+#                                       higher risk tolerance given small
+#                                       account size, "open to risk of
+#                                       ruin within reason")
+#
+# Same watchlist as master_strategy (SPY/AAPL/MSFT/NVDA) -- this isolates
+# "does riding it harder close the gap to buy-and-hold" from the
+# separate ticker-selection question (see v20 for that one).
+#
+# Compare against master_strategy and buy-and-hold on both windows:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v19_let_it_ride.yaml --chart --save --label "v19-let-it-ride"
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+  - NVDA
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 20
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 3.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.3
+    max_units: 6
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
