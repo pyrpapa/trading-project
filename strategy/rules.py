@@ -61,7 +61,9 @@ def entry_reason_text(cfg: dict) -> str:
     entry_cfg = cfg["entry"]
     entry_type = entry_cfg.get("type", "ma_crossover")
 
-    if entry_type == "donchian_breakout":
+    if entry_type == "always":
+        return "no entry timing filter -- bought back in as soon as eligible (v21 always-in test)"
+    elif entry_type == "donchian_breakout":
         breakout_period = entry_cfg.get("breakout_period", 20)
         reason = f"price closed above its {breakout_period}-day high (Donchian breakout)"
     else:
@@ -124,7 +126,17 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     else:
         vol_ok = True
 
-    if entry_type == "donchian_breakout":
+    if entry_type == "always":
+        # Unconditional entry -- no timing filter at all, not even volume
+        # confirmation. Buys back in on the very next eligible day after
+        # any exit (or on day one), regardless of price/MA/volume state.
+        # Exists purely to isolate a question: does the ENTRY rule add
+        # value, or does all of this system's edge come from the
+        # exit/stop/sizing machinery instead? Everything else (exits,
+        # ATR sizing, pyramiding) is unchanged -- only the entry filter
+        # is removed. See config/strategy_v21_always_in.yaml.
+        buy_signal = pd.Series(True, index=df.index)
+    elif entry_type == "donchian_breakout":
         # Buy whenever price closes above the highest high of the prior
         # breakout_period days — a genuine new price extreme, not a
         # smoothed average crossing. Unlike the MA rule below, this isn't

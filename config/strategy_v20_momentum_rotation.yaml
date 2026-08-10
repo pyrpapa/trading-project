@@ -1,0 +1,102 @@
+# EXPERIMENTAL v20 -- momentum rotation. New selection logic (see
+# strategy/portfolio_selection.py's new select_by_momentum()), not just
+# a config tweak: instead of a fixed watchlist (master_strategy) or
+# correlation-minimized diversification (v7/v9/v13, which explicitly
+# AVOIDS concentrating in strong performers), this ranks a wide 22-name
+# candidate pool by trailing return every month and concentrates capital
+# into whichever TWO are currently the strongest -- rotating as
+# leadership changes, never diluted across all 22 at once the way
+# v15/v18 were.
+#
+# This is the direct answer to "how do we use more tickers without the
+# severe profit downside v15/v18 showed": those diluted capital across
+# many SIMULTANEOUS correlated positions, which multiplied whipsaw cost
+# in a crash without buying real diversification. Momentum rotation
+# never holds more than target_size positions at once -- it's still
+# concentrated, just not locked into today's 4 fixed names forever. If
+# NVDA-style leadership emerges in a name not on master_strategy's
+# watchlist, this can rotate into it; master_strategy never will.
+#
+# Entry/exit/risk sizing deliberately UNCHANGED from master_strategy
+# (not v19's looser stops, which were rejected) -- isolates the
+# ticker-SELECTION-method variable cleanly from the exit-tightness
+# question already tested separately.
+#
+# portfolio_selection.method: "momentum" (new) vs the default
+# "correlation" every prior portfolio_selection config used.
+# rebalance_frequency_months: 1 (monthly, not quarterly) -- a
+# concentrated momentum approach needs to react faster to changing
+# leadership than a diversification-for-smoothness approach does.
+# target_size: 2 -- deliberately concentrated, matching the "higher
+# R-ratio potential, open to bigger swings" brief this is testing for.
+#
+# Compare against master_strategy (fixed 4) and v7 (correlation-based
+# selection, for a same-mechanism-different-goal comparison) on both
+# windows:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v20_momentum_rotation.yaml --chart --save --label "v20-momentum"
+#   python run_backtest.py --config config/strategy_v14_looser_caps_crisis.yaml --chart --save --label "master-crisis-compare"
+#   python run_backtest.py --config config/strategy_v20_momentum_rotation_crisis.yaml --chart --save --label "v20-momentum-crisis"
+
+watchlist: []
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+portfolio_selection:
+  enabled: true
+  method: momentum          # new -- rank by trailing return, not correlation
+  candidate_universe:
+    - SPY
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - NVDA
+    - JPM
+    - JNJ
+    - PFE
+    - MRK
+    - XOM
+    - CVX
+    - CAT
+    - PG
+    - COST
+    - KO
+    - PEP
+    - WMT
+    - HD
+    - VZ
+    - T
+    - DIS
+  target_size: 2
+  min_avg_dollar_volume: 20000000
+  lookback_period: 90
+  rebalance_frequency_months: 1
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

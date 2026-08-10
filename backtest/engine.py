@@ -91,6 +91,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     ps_min_avg_dollar_volume = ps_cfg.get("min_avg_dollar_volume", 0)
     ps_lookback = ps_cfg.get("lookback_period", 90)
     ps_rebalance_months = ps_cfg.get("rebalance_frequency_months", 3)
+    ps_method = ps_cfg.get("method", "correlation")
 
     # Union of all trading dates across tickers, restricted to the actual
     # requested backtest window. price_data itself may contain extra
@@ -125,6 +126,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
         if ps_enabled and next_rebalance_date is not None and date >= next_rebalance_date:
             selected = portfolio_selection.select_portfolio(
                 ps_candidates, price_data, date, ps_lookback, ps_min_avg_dollar_volume, ps_target_size,
+                method=ps_method,
             )
             previous_active = active_tickers
             active_tickers = set(selected)

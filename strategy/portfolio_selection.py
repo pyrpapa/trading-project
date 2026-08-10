@@ -35,6 +35,8 @@ Config (see config/strategy_v7_portfolio_selection.yaml):
       lookback_period: 90
       rebalance_frequency_months: 3
 """
+import pandas as pd
+
 from strategy.correlation import trailing_correlation
 
 
@@ -124,7 +126,56 @@ def select_diversified_subset(candidates, price_data: dict, date, lookback: int,
     return selected
 
 
-def select_portfolio(candidates, price_data: dict, date, lookback: int, min_avg_dollar_volume: float, target_size: int) -> list:
-    """One call: liquidity filter, then diversified selection."""
+def _trailing_return(ticker: str, price_data: dict, date, lookback: int):
+    """
+    Total return over the trailing `lookback` trading days up to and
+    including `date`. Returns None if there isn't enough history yet --
+    same fail-open-to-exclusion convention as trailing_correlation().
+    """
+    df = price_data.get(ticker)
+    if df is None or date not in df.index:
+        return None
+    idx = df.index.get_loc(date)
+    if idx < lookback:
+        return None
+    start_price = df["Close"].iloc[idx - lookback]
+    end_price = df["Close"].iloc[idx]
+    if start_price is None or start_price <= 0 or pd.isna(start_price) or pd.isna(end_price):
+        return None
+    return float(end_price / start_price - 1)
+
+
+def select_by_momentum(candidates, price_data: dict, date, lookback: int, target_size: int) -> list:
+    """
+    Relative-strength / momentum selection -- the opposite instinct from
+    select_diversified_subset(). Ranks liquidity-eligible candidates by
+    trailing total return over `lookback` days and returns the top
+    `target_size`. Concentrates capital into whichever names are
+    CURRENTLY the strongest performers, rotating as leadership changes,
+    instead of either a fixed watchlist or a deliberately-uncorrelated
+    basket. Candidates with no computable trailing return (insufficient
+    history) are excluded, not penalized to the bottom -- same fail-closed
+    convention as the liquidity filter.
+    """
+    scored = [(t, r) for t in candidates for r in [_trailing_return(t, price_data, date, lookback)] if r is not None]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return [ticker for ticker, _ in scored[:target_size]]
+
+
+def select_portfolio(
+    candidates, price_data: dict, date, lookback: int, min_avg_dollar_volume: float, target_size: int,
+    method: str = "correlation",
+) -> list:
+    """
+    One call: liquidity filter, then selection. `method` picks the
+    selection strategy:
+      - "correlation" (default, v7/v9/v13 behavior): pick the most
+        mutually UNcorrelated subset -- optimizes for a smoother ride.
+      - "momentum" (v20+): pick whichever names have the strongest
+        trailing return -- optimizes for chasing current strength,
+        explicitly NOT for diversification.
+    """
     eligible = liquidity_filter(candidates, price_data, date, lookback, min_avg_dollar_volume)
+    if method == "momentum":
+        return select_by_momentum(eligible, price_data, date, lookback, target_size)
     return select_diversified_subset(eligible, price_data, date, lookback, target_size)

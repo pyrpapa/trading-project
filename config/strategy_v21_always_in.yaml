@@ -1,0 +1,65 @@
+# EXPERIMENTAL v21 -- "always-in": isolates whether the ENTRY rule adds
+# value at all, or whether every bit of this system's edge comes from
+# the exit/stop/sizing machinery instead. Direct test of the hypothesis
+# "if master_strategy doesn't beat buy-and-hold, the entry/exit logic
+# isn't giving any edge."
+#
+# entry.type: always (new -- see strategy/rules.py) removes the MA-
+# crossover timing filter entirely. It buys back in on the very next
+# eligible day after any exit (or day one), with NO price/MA/volume
+# condition at all -- as close to "always maximally invested" as this
+# engine's day-by-day, one-position-at-a-time-per-ticker structure
+# allows. Everything else is byte-identical to master_strategy: same
+# watchlist, same ATR-unit sizing, same Donchian-low exit, same
+# pyramiding.
+#
+# How to read the result:
+#   - If v21 BEATS master_strategy: entry timing was net-negative --
+#     the MA-crossover wait was costing more than it protected, and all
+#     of the real edge comes from exits/sizing/pyramiding alone.
+#   - If v21 UNDERPERFORMS master_strategy: entry timing has real value
+#     (it's avoiding some periods that not-timed-at-all doesn't).
+#   - If v21 beats master_strategy AND closes the gap to buy-and-hold:
+#     that's a strong signal the entry rule specifically was the drag on
+#     buy-and-hold this whole time, not the exit/risk side.
+#
+# Compare against master_strategy and buy-and-hold on both windows:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v21_always_in.yaml --chart --save --label "v21-always-in"
+
+watchlist:
+  - SPY
+  - AAPL
+  - MSFT
+  - NVDA
+
+entry:
+  type: always
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

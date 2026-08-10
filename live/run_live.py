@@ -88,6 +88,7 @@ def main():
     ps_target_size = ps_cfg.get("target_size", 3)
     ps_min_avg_dollar_volume = ps_cfg.get("min_avg_dollar_volume", 0)
     ps_lookback = ps_cfg.get("lookback_period", 90)
+    ps_method = ps_cfg.get("method", "correlation")
 
     print(f"{'[DRY RUN] ' if dry_run else ''}Live check — {dt.date.today()}")
 
@@ -217,6 +218,7 @@ def main():
             active_tickers = set(portfolio_selection.select_portfolio(
                 list(universe_price_data.keys()), universe_price_data, ref_date,
                 ps_lookback, ps_min_avg_dollar_volume, ps_target_size,
+                method=ps_method,
             ))
         else:
             active_tickers = set()
