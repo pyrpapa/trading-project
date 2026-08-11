@@ -140,6 +140,27 @@ class SupabaseStore:
         )
         return result.data[0] if result.data else None
 
+    def find_last_closed_trade(self, ticker: str, source: str = "paper", exit_reason: str = None):
+        """
+        The most recent CLOSED trade for a ticker, optionally filtered to
+        a specific exit_reason (e.g. "stop_loss" -- see the stop-out
+        cooldown in live/run_live.py). Returns None if no closed trade
+        matches, which callers should treat as "no cooldown in effect",
+        same fail-open convention as everything else that reconstructs
+        state from Supabase.
+        """
+        query = (
+            self.client.table("trades")
+            .select("*")
+            .eq("ticker", ticker)
+            .eq("source", source)
+            .not_.is_("exit_date", "null")
+        )
+        if exit_reason:
+            query = query.eq("exit_reason", exit_reason)
+        result = query.order("exit_date", desc=True).limit(1).execute()
+        return result.data[0] if result.data else None
+
     def find_open_trades(self, ticker: str, source: str = "paper") -> list:
         """
         All currently-open trade rows for a ticker, ordered oldest-first

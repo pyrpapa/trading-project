@@ -79,6 +79,17 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     corr_threshold = correlation_cfg.get("correlation_threshold", 0.7)
     corr_max_correlated = correlation_cfg.get("max_correlated_positions", 2)
 
+    # Stop-out cooldown -- blocks re-entry into a ticker for `days` after
+    # it exits via stop_loss specifically (not trend_exit/take_profit).
+    # Targets "immediately re-enter and get whipsawed again": a stock
+    # that just stopped out is, by definition, one the fast entry signal
+    # was just wrong about recently -- waiting a bit before trusting a
+    # fresh signal on the SAME ticker again. Disabled unless a config
+    # explicitly opts in via risk.stop_cooldown.enabled.
+    cooldown_cfg = cfg["risk"].get("stop_cooldown") or {}
+    cooldown_enabled = cooldown_cfg.get("enabled", False)
+    cooldown_days = cooldown_cfg.get("days", 10)
+
     # Portfolio selection (see strategy/portfolio_selection.py) -- chooses
     # WHICH tickers are even eligible for new entries, re-evaluated on a
     # rebalance schedule using only trailing data (no lookahead). When
@@ -108,8 +119,9 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     cash = starting_cash
     open_positions = {}  # ticker -> list[Position] (a "stack" -- len 1 unless pyramiding)
     closed_trades = []
-    blocked_signals = []  # BUY signals the circuit breaker skipped
+    blocked_signals = []  # BUY signals the circuit breaker (or cooldown) skipped
     rebalance_log = []    # portfolio selection's rebalance history
+    last_stop_date = {}   # ticker -> date of its most recent stop_loss exit (cooldown)
     pyramid_log = []      # pyramid-add events (see the pyramid-add block below)
     active_tickers = set(price_data.keys()) if not ps_enabled else set()
     next_rebalance_date = all_dates[0] if (ps_enabled and all_dates) else None
@@ -214,6 +226,8 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
                         "units_in_stack": len(stack),
                     })
                 del open_positions[ticker]
+                if exit_reason == "stop_loss" and cooldown_enabled:
+                    last_stop_date[ticker] = date
 
         # Recompute invested value after exits
         invested_value = sum(
@@ -339,6 +353,19 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
                 )
                 if corr_count >= corr_max_correlated:
                     reason = correlation.breaker_reason(ticker, corr_count, corr_threshold, corr_max_correlated)
+                    blocked_signals.append({
+                        "ticker": ticker, "date": date, "reason": reason,
+                        "log": journal.format_blocked(ticker, reason),
+                    })
+                    continue
+
+            if cooldown_enabled and ticker in last_stop_date:
+                days_since_stop = (date - last_stop_date[ticker]).days
+                if days_since_stop < cooldown_days:
+                    reason = (
+                        f"stopped out {days_since_stop} day(s) ago, "
+                        f"cooldown is {cooldown_days} day(s)"
+                    )
                     blocked_signals.append({
                         "ticker": ticker, "date": date, "reason": reason,
                         "log": journal.format_blocked(ticker, reason),

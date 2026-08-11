@@ -94,6 +94,16 @@ def main():
     corr_threshold = correlation_cfg.get("correlation_threshold", 0.7)
     corr_max_correlated = correlation_cfg.get("max_correlated_positions", 2)
 
+    # Stop-out cooldown -- see backtest/engine.py for the full rationale.
+    # Live mode has no in-memory trade history, so it looks up the most
+    # recent stop_loss exit for a ticker from Supabase each run (see
+    # store.find_last_closed_trade below) -- same fail-open pattern as
+    # every other Supabase-backed check in this file: no store, or no
+    # matching record, means no cooldown in effect.
+    cooldown_cfg = cfg["risk"].get("stop_cooldown") or {}
+    cooldown_enabled = cooldown_cfg.get("enabled", False)
+    cooldown_days = cooldown_cfg.get("days", 10)
+
     ps_cfg = cfg.get("portfolio_selection") or {}
     ps_enabled = ps_cfg.get("enabled", False)
     ps_target_size = ps_cfg.get("target_size", 3)
@@ -391,6 +401,15 @@ def main():
                 reason = correlation.breaker_reason(ticker, corr_count, corr_threshold, corr_max_correlated)
                 print(f"  {journal.format_blocked(ticker, reason)}")
                 continue
+
+        if cooldown_enabled and store:
+            last_stop = store.find_last_closed_trade(ticker, source="paper", exit_reason="stop_loss")
+            if last_stop and last_stop.get("exit_date"):
+                days_since_stop = (dt.date.today() - dt.date.fromisoformat(last_stop["exit_date"])).days
+                if days_since_stop < cooldown_days:
+                    reason = f"stopped out {days_since_stop} day(s) ago, cooldown is {cooldown_days} day(s)"
+                    print(f"  {journal.format_blocked(ticker, reason)}")
+                    continue
 
         current_price = df["Close"].iloc[-1]
 

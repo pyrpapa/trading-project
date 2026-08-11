@@ -1,0 +1,62 @@
+# EXPERIMENTAL v30 -- master_strategy's exact mechanics (8-asset crypto,
+# 150-day regime filter, ATR sizing, pyramiding, Donchian exit) with a
+# NEW opt-in feature: risk.stop_cooldown. Blocks re-entry into a ticker
+# for `days` after it exits via stop_loss specifically (not trend_exit
+# or take_profit) -- directly targets "immediately re-enter and get
+# whipsawed again."
+#
+# Verified with a hand-crafted synthetic test before trusting it (same
+# discipline as every new feature this session): confirmed a re-entry
+# attempt within the cooldown window is correctly blocked (with the
+# right day-count in the log), and a re-entry attempt after the
+# cooldown expires correctly fires.
+#
+# Started at 10 days -- same order of magnitude as this project's other
+# short-term windows (volume_ma_period, atr_period), not yet swept.
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v30_stop_cooldown.yaml --chart --save --label "v30-stop-cooldown"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+  stop_cooldown:
+    enabled: true
+    days: 10
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
