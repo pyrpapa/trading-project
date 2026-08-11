@@ -52,38 +52,54 @@
 # either, it has to be checked each time).
 #
 # REGIME FILTER ADDED (v27, config/strategy_v27_regime_filter.yaml):
-# entry.regime_filter_period: 200 -- requires price above a 200-day
-# moving average, in addition to the existing 20-day crossover + volume
+# entry.regime_filter_period -- requires price above a slow moving
+# average, in addition to the existing 20-day crossover + volume
 # confirmation, before taking an entry. Built specifically in response
 # to the 2023-2026 window's whipsaw problem (292 trades, 31.85% win
 # rate, SQN 2.122) -- don't take the fast signal unless the slower,
-# macro trend agrees. Tested against ALL THREE crisis windows, not just
-# the one it targets, and improved return AND drawdown SIMULTANEOUSLY
-# in the two windows that matter most:
-#   2019-2024:        3016.65%/77.47%/yr/-60.29% DD -> 6881.94%/103.02%/yr/-44.24% DD
-#   2020-2022 crisis:   436.54%/91.69%/yr/-58.07% DD -> 893.83%/143.38%/yr/-41.79% DD
-#   2023-2026 crisis:     9.56%/2.57%/yr/-57.16% DD -> 148.7%/28.8%/yr/-37.93% DD
+# macro trend agrees. First tested at 200 days, improved return AND
+# drawdown SIMULTANEOUSLY vs no filter in all three windows.
+#
+# SWEPT afterward (50/75/100/150/200/250/300) across all three windows
+# -- 150 beat 200 (and everything else) on RETURN in all three windows
+# simultaneously, not just on average, with drawdown that's either
+# better than 200 (2019-2024) or essentially tied with it (the other
+# two). 250/300 get somewhat lower drawdown but give up much more
+# return than the drawdown improvement is worth (e.g. 2020-2022: 250 vs
+# 150 only improves DD by ~8pts while giving up ~12.5pts of annualized
+# return). Settled on 150, not the original 200:
+#   2019-2024:        3016.65%/77.47%/yr/-60.29% DD (no filter) -> 10446.41%/117.48%/yr/-41.97% DD (150-day)
+#   2020-2022 crisis:   436.54%/91.69%/yr/-58.07% DD (no filter) ->  1009.25%/153.96%/yr/-41.97% DD (150-day)
+#   2023-2026 crisis:     9.56%/2.57%/yr/-57.16% DD (no filter) ->   153.21%/29.44%/yr/-38.82% DD (150-day)
 # Trade count fell across the board vs no filter at all, consistent with
 # the filter cutting whipsaw trades that weren't part of a real macro
 # trend -- confirmed with a synthetic sandbox test before trusting it.
 #
+# RETESTED two previously-rejected ideas with the regime filter active,
+# to check whether their original failures were really about whipsaw:
+# both stayed rejected (config/strategy_v28_candidates_with_regime_filter.yaml
+# -- DOT/UNI/BCH/FIL still diluted/hurt; config/strategy_v29_let_it_ride_regime_filter.yaml
+# -- wider stops/slower exit still hurt). Confirms those are real,
+# independent findings, not artifacts of unfiltered whipsaw.
+#
 # OR FALLBACK FOR NEWLY-LISTED ASSETS: regime_ma is NaN (and NaN
-# comparisons are always False in pandas) for the first 200 days of ANY
-# asset's OWN history -- without a fix, a newly-listed, more speculative
-# coin would be fully locked out of trading for its first ~200 days,
-# exactly when its first big move is most likely. Fixed with an OR:
-# (regime confirms) OR (not enough history to judge it at all). Verified
-# this wasn't just a theoretical edge case -- SOL-USD and AVAX-USD,
-# already in this watchlist, only started trading in 2020 and were
-# actually affected by this within the 2019-2024 and 2020-2022 windows
-# (2023-2026 unaffected -- both were long past 200 days old by then).
+# comparisons are always False in pandas) for the first
+# regime_filter_period days of ANY asset's OWN history -- without a
+# fix, a newly-listed, more speculative coin would be fully locked out
+# of trading for its first ~150 days (at the current setting), exactly
+# when its first big move is most likely. Fixed with an OR: (regime
+# confirms) OR (not enough history to judge it at all). Verified this
+# wasn't just a theoretical edge case -- SOL-USD and AVAX-USD, already
+# in this watchlist, only started trading in 2020 and were actually
+# affected by this within the 2019-2024 and 2020-2022 windows
+# (2023-2026 unaffected -- both were long past the filter period old by then).
 # The numbers above already reflect the fix.
 #
 # HONEST TRADEOFFS, not just headline numbers (8-asset watchlist, DOGE
-# removed, DOT/UNI/BCH/FIL rejected, 200-day regime filter + OR fallback):
-#   - 2019-2024: 6881.94% total / 103.02%/yr / -44.24% DD
-#   - 2020-2022 crisis: 893.83% total / 143.38%/yr / -41.79% DD
-#   - 2023-2026 crisis: 148.7% total / 28.8%/yr / -37.93% DD
+# removed, DOT/UNI/BCH/FIL rejected, 150-day regime filter + OR fallback):
+#   - 2019-2024: 10446.41% total / 117.48%/yr / -41.97% DD
+#   - 2020-2022 crisis: 1009.25% total / 153.96%/yr / -41.97% DD
+#   - 2023-2026 crisis: 153.21% total / 29.44%/yr / -38.82% DD
 #   - Even with the regime filter, return is still concentrated in a
 #     handful of outlier trades (a huge SOL 2023-2024 run, an early BTC
 #     2020-2021 trade) -- treat the headline annualized numbers as "what
@@ -135,7 +151,7 @@ entry:
   ma_period: 20
   volume_confirmation: true
   volume_ma_period: 20
-  regime_filter_period: 200
+  regime_filter_period: 150
 
 exit:
   ma_exit: true
