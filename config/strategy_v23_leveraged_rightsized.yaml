@@ -1,0 +1,63 @@
+# EXPERIMENTAL v23 -- v22 (leveraged ETFs: SPXL/TQQQ/SOXL) with the
+# sizing formula corrected, not the entry/exit logic.
+#
+# Diagnosed directly from v22's trade log before changing anything:
+# average position size was only 8.58% of equity (median 7.87%),
+# nowhere near the 35% max_position_pct cap -- 196 of 284 trades used
+# under 10%. The ATR-unit formula sizes each position to risk a FIXED
+# % of equity given the instrument's OWN volatility (bigger ATR on a
+# leveraged fund -> smaller position for the same risk budget) -- so it
+# was quietly neutralizing the leverage at the sizing layer. The
+# strategy was paying leveraged-ETF decay costs without ever actually
+# taking leveraged-sized bets. That's why v22 captured less upside than
+# even master_strategy on the plain underlying stocks.
+#
+# The fix: risk_pct_per_unit 1.0 -> 3.0. This restores real exposure
+# without touching the entry/exit discipline that gave v22 its
+# -25.61% drawdown (vs leveraged buy-and-hold's -76.86% to -90.46% per
+# name) -- same stop_atr_multiple, same Donchian-10 exit, same MA-
+# crossover entry, same pyramiding (which requires atr_unit sizing --
+# switching to flat % sizing instead would have fixed the same problem
+# but silently disabled pyramiding, a validated, separately-earned
+# piece of edge; not done here on purpose).
+#
+# Compare against v22 (undersized) and leveraged buy-and-hold on the
+# same window (no crisis-window variant -- see v22's header, same data
+# limitation applies here):
+#   python run_backtest.py --config config/strategy_v22_leveraged_etfs.yaml --chart --save --label "v22-compare"
+#   python run_backtest.py --config config/strategy_v23_leveraged_rightsized.yaml --chart --save --label "v23-leveraged-rightsized"
+
+watchlist:
+  - SPXL
+  - TQQQ
+  - SOXL
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 3.0     # up from 1.0 -- see header note
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
