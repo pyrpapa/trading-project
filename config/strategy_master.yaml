@@ -2,43 +2,71 @@
 # (paper first) via live/run_live.py and the GitHub Actions daily
 # schedule. Previously this was an equities config (SPY/AAPL/MSFT/NVDA)
 # -- that track is preserved unchanged at config/strategy_equities_master.yaml,
-# still fully valid, just no longer the live default. This file is now
-# v25's 9-asset expanded crypto watchlist, chosen deliberately over the
-# more conservative config/strategy_crypto_master.yaml (BTC/ETH only,
-# -28% to -30% drawdown range) in favor of bigger backtested returns
-# and more frequent trade activity, at the cost of meaningfully deeper
-# drawdown (-57% to -60% range). That tradeoff was made knowingly, not
-# by default -- see the comparison in the "HONEST TRADEOFFS" section
-# below before assuming this is a strict upgrade over crypto_master.
+# still fully valid, just no longer the live default. This file started
+# as v25's 9-asset expanded crypto watchlist; DOGE-USD was removed
+# (see "WHY DOGE WAS DROPPED" below) leaving 8 assets. Chosen
+# deliberately over the more conservative config/strategy_crypto_master.yaml
+# (BTC/ETH only, -28% to -30% drawdown range) in favor of bigger
+# backtested returns and more frequent trade activity, at the cost of
+# meaningfully deeper drawdown (-58% to -60% range). That tradeoff was
+# made knowingly, not by default -- see "HONEST TRADEOFFS" below before
+# assuming this is a strict upgrade over crypto_master.
 #
-# Validated across TWO historical crypto crises (2017-2019's ~84% BTC
-# crash, 2020-2022's Terra/FTX crash) plus the calm 2019-2024 window --
-# but NOT to the same depth as the equities track (a dozen-plus rejected
-# alternatives tested against a real 2008-style crash). See
-# config/strategy_v25_crypto_expanded.yaml and
-# config/strategy_v25_crypto_expanded_crisis_2022.yaml for the full
-# results this config is built from.
+# Validated across THREE historical crypto crises (2017-2019's ~84% BTC
+# crash, 2020-2022's Terra/FTX crash, 2023-2026's ATH-into-crash cycle --
+# see config/strategy_master_crisis_2026.yaml) plus the calm 2019-2024
+# window -- but NOT to the same depth as the equities track (a dozen-
+# plus rejected alternatives tested against a real 2008-style crash).
 #
-# HONEST TRADEOFFS, not just headline numbers:
-#   - 2019-2024: 4847.25% total / 91.68%/yr / -57.19% DD / SQN 4.775
-#   - 2020-2022 crisis: 350.97% total / 79.21%/yr / -59.85% DD / SQN 2.585
-#   - The 2019-2024 return is HEAVILY concentrated: the top 3 trades
-#     (out of 490) account for 57.4% of all profit; the top 10 exceed
-#     100% of total profit (the other 480 trades net to roughly zero).
-#     Two of the very top trades are the SAME ticker (DOGE-USD) within
-#     the same few months in 2024, tied to a specific, likely
-#     non-repeatable social/political catalyst -- treat the headline
-#     annualized number as "what happened when a couple of outlier
-#     events landed," not "the typical year to expect."
+# THE 2023-2026 WINDOW IS THE MOST SOBERING RESULT OF THE THREE, AND
+# THE MOST RELEVANT ONE (closest to right now): 9.56% total / 2.57%/yr
+# / -57.16% DD / SQN 2.122, vs buy-and-hold's 146.19% / -70.23% DD over
+# the same period -- the strategy captured only ~6.5% of buy-and-hold's
+# return here (vs ~50-56% in every other window), and the drawdown
+# reduction was much smaller in relative terms too (~19% less than
+# buy-and-hold, vs ~50%+ in the other two crisis windows). This longer,
+# more complex window (2023 recovery -> 2024-2025 bull run -> 2025-10-06
+# ATH at $126,198 -> June 2026 crash to ~$65,600) gave trend-following
+# more chances to whipsaw through choppy stretches than the other two,
+# cleaner runup-into-crash windows did. This directly overlaps with,
+# and explains, the rough recent live/paper-trading regime -- don't
+# read the 2019-2024/2020-2022 numbers as the reliable expectation
+# without weighing this one too.
+#
+# WHY DOGE WAS DROPPED: checked directly -- ~42.6% of v25's ENTIRE
+# 2019-2024 profit came from two DOGE-USD trades within the same few
+# months in 2024, tied to a specific, likely non-repeatable social/
+# political catalyst. Removed it in favor of a more representative
+# result, at the cost of a much smaller headline number (see below).
+#
+# WHY DOT/UNI/BCH/FIL WERE TESTED AND REJECTED (config/strategy_v26_crypto_candidates.yaml):
+# all 4 confirmed tradable on Alpaca with solid history, deliberately
+# chosen as established/utility-driven rather than another meme coin --
+# but diluted returns AND made drawdown meaningfully worse in BOTH
+# windows tested (2019-2024: 3016.65%/77.47%/yr/-60.29% DD down to
+# 865.56%/45.96%/yr/-72.01% DD; 2020-2022: similar pattern). Same
+# ticker-dilution lesson as the equities side, just proven false for
+# THIS specific set of additions rather than universally true for
+# crypto (SOL/XRP/LTC/ADA/AVAX/LINK, already in this watchlist, DID
+# help when added in v25 -- more tickers isn't automatically bad
+# either, it has to be checked each time).
+#
+# HONEST TRADEOFFS, not just headline numbers (current 8-asset watchlist,
+# DOGE removed, DOT/UNI/BCH/FIL rejected):
+#   - 2019-2024: 3016.65% total / 77.47%/yr / -60.29% DD / SQN 4.518
+#   - 2020-2022 crisis: 436.54% total / 91.69%/yr / -58.07% DD / SQN 2.69
+#   - Even without DOGE, this return is still concentrated in a handful
+#     of outlier trades (a huge SOL 2023-2024 run, an early BTC 2020-2021
+#     trade) -- treat the headline annualized number as "what happened
+#     when a few outlier events landed," not "the typical year to expect."
 #   - Standard SQN penalizes crypto's large, dispersed UPSIDE the same
 #     way it would penalize unpredictable losses -- a downside-only
 #     (Sortino-style) version of the same metric actually favors crypto
-#     over the equities track (39.2 vs 22.1 for crypto_master; not
-#     recomputed for v25 specifically, but the same distortion applies).
-#     Don't read the lower standard SQN here as "worse risk control" --
-#     checked directly: downside R-multiple dispersion is nearly
-#     identical to the equities track (both tightly bounded by the same
-#     2N stop); the gap is entirely from bigger, more variable wins.
+#     over the equities track (checked directly on crypto_master: 39.2 vs
+#     22.1; not recomputed for this exact watchlist, but the same
+#     distortion applies -- downside R-multiple dispersion is nearly
+#     identical to the equities track, both tightly bounded by the same
+#     2N stop; the gap is entirely from bigger, more variable wins).
 #
 # SCHEDULING: crypto trades 24/7 with daily bars anchored to UTC
 # midnight, unlike equities (anchored to the 4pm ET close). The GitHub

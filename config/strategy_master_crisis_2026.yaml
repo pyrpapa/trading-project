@@ -1,0 +1,70 @@
+# master_strategy.yaml (8-asset crypto watchlist), stress-tested against
+# the THIRD real crypto crisis this project now tests against -- the
+# most recent one, and the one directly relevant to what's actually
+# happening in live paper trading right now. Same reasoning as
+# strategy_v24_crypto_crisis.yaml (2017-2019) and
+# strategy_v24_crypto_crisis_2022.yaml (2020-2022), added after
+# confirming (via web search, since this is inside/after the model's
+# knowledge cutoff) that a real, well-documented crash happened:
+#
+# BTC hit an all-time high of $126,198 on 2025-10-06, then fell ~48%
+# to roughly $65,600 in a crash centered on June 2026 -- driven by
+# Trump's 15% global tariff shock, a tech stock selloff, record
+# liquidations (>$3.2B in a single day), Bitcoin ETFs flipping to net
+# sellers after a $3.8B outflow streak, a break below the 365-day
+# moving average, and escalating US-Iran geopolitical tension. ETH fell
+# ~35% from its 2026 highs; smaller altcoins dropped 50%+.
+#
+# Window: 2023-01-01 (post-2022-crash recovery start) through the most
+# recent available data -- captures the full 2023-2025 recovery/bull
+# run into the October 2025 ATH and the 2026 crash, same "runup into
+# crash" shape as the other two crisis windows, just the most recent
+# cycle instead of an older one.
+#
+# This was ALREADY partially reflected in the "past year" backtest run
+# directly in conversation (not saved as its own file) -- this makes it
+# a permanent, reproducible, isolated crisis-window test like the other
+# two, instead of only a one-off recency check.
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-2023-2026-compare"
+#   python run_backtest.py --config config/strategy_master_crisis_2026.yaml --chart --save --label "master-crisis-2026"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2023-01-01"
+  end_date: "2026-08-09"
+  commission_pct: 0.0
