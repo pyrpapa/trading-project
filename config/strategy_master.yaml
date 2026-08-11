@@ -51,14 +51,36 @@
 # help when added in v25 -- more tickers isn't automatically bad
 # either, it has to be checked each time).
 #
-# HONEST TRADEOFFS, not just headline numbers (current 8-asset watchlist,
-# DOGE removed, DOT/UNI/BCH/FIL rejected):
-#   - 2019-2024: 3016.65% total / 77.47%/yr / -60.29% DD / SQN 4.518
-#   - 2020-2022 crisis: 436.54% total / 91.69%/yr / -58.07% DD / SQN 2.69
-#   - Even without DOGE, this return is still concentrated in a handful
-#     of outlier trades (a huge SOL 2023-2024 run, an early BTC 2020-2021
-#     trade) -- treat the headline annualized number as "what happened
-#     when a few outlier events landed," not "the typical year to expect."
+# REGIME FILTER ADDED (v27, config/strategy_v27_regime_filter.yaml):
+# entry.regime_filter_period: 200 -- requires price above a 200-day
+# moving average, in addition to the existing 20-day crossover + volume
+# confirmation, before taking an entry. Built specifically in response
+# to the 2023-2026 window's whipsaw problem (292 trades, 31.85% win
+# rate, SQN 2.122) -- don't take the fast signal unless the slower,
+# macro trend agrees. Tested against ALL THREE crisis windows, not just
+# the one it targets, and improved return AND drawdown SIMULTANEOUSLY
+# in every single one -- not the usual tradeoff seen in nearly every
+# other experiment in this project:
+#   2019-2024:        3016.65%/77.47%/yr/-60.29% DD -> 6177.45%/99.45%/yr/-44.24% DD
+#   2020-2022 crisis:   436.54%/91.69%/yr/-58.07% DD -> 970.35%/150.48%/yr/-41.79% DD
+#   2023-2026 crisis:     9.56%/2.57%/yr/-57.16% DD -> 148.7%/28.8%/yr/-37.93% DD
+# Trade count fell across the board (461->312 calm window, 292->170 in
+# 2023-2026), consistent with the filter cutting whipsaw trades that
+# weren't part of a real macro trend -- exactly the mechanism it was
+# built for, confirmed with a synthetic sandbox test before trusting it
+# (strategy/rules.py correctly blocks crossovers below the regime
+# average and allows them once the macro trend has confirmed).
+#
+# HONEST TRADEOFFS, not just headline numbers (8-asset watchlist, DOGE
+# removed, DOT/UNI/BCH/FIL rejected, 200-day regime filter added):
+#   - 2019-2024: 6177.45% total / 99.45%/yr / -44.24% DD / SQN 4.139
+#   - 2020-2022 crisis: 970.35% total / 150.48%/yr / -41.79% DD / SQN 3.186
+#   - 2023-2026 crisis: 148.7% total / 28.8%/yr / -37.93% DD / SQN 1.809
+#   - Even with the regime filter, return is still concentrated in a
+#     handful of outlier trades (a huge SOL 2023-2024 run, an early BTC
+#     2020-2021 trade) -- treat the headline annualized numbers as "what
+#     happened when a few outlier events landed AND the regime filter
+#     let them through," not "the typical year to expect."
 #   - Standard SQN penalizes crypto's large, dispersed UPSIDE the same
 #     way it would penalize unpredictable losses -- a downside-only
 #     (Sortino-style) version of the same metric actually favors crypto
@@ -105,6 +127,7 @@ entry:
   ma_period: 20
   volume_confirmation: true
   volume_ma_period: 20
+  regime_filter_period: 200
 
 exit:
   ma_exit: true
