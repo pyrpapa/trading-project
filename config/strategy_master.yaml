@@ -59,23 +59,31 @@
 # rate, SQN 2.122) -- don't take the fast signal unless the slower,
 # macro trend agrees. Tested against ALL THREE crisis windows, not just
 # the one it targets, and improved return AND drawdown SIMULTANEOUSLY
-# in every single one -- not the usual tradeoff seen in nearly every
-# other experiment in this project:
-#   2019-2024:        3016.65%/77.47%/yr/-60.29% DD -> 6177.45%/99.45%/yr/-44.24% DD
-#   2020-2022 crisis:   436.54%/91.69%/yr/-58.07% DD -> 970.35%/150.48%/yr/-41.79% DD
+# in the two windows that matter most:
+#   2019-2024:        3016.65%/77.47%/yr/-60.29% DD -> 6881.94%/103.02%/yr/-44.24% DD
+#   2020-2022 crisis:   436.54%/91.69%/yr/-58.07% DD -> 893.83%/143.38%/yr/-41.79% DD
 #   2023-2026 crisis:     9.56%/2.57%/yr/-57.16% DD -> 148.7%/28.8%/yr/-37.93% DD
-# Trade count fell across the board (461->312 calm window, 292->170 in
-# 2023-2026), consistent with the filter cutting whipsaw trades that
-# weren't part of a real macro trend -- exactly the mechanism it was
-# built for, confirmed with a synthetic sandbox test before trusting it
-# (strategy/rules.py correctly blocks crossovers below the regime
-# average and allows them once the macro trend has confirmed).
+# Trade count fell across the board vs no filter at all, consistent with
+# the filter cutting whipsaw trades that weren't part of a real macro
+# trend -- confirmed with a synthetic sandbox test before trusting it.
+#
+# OR FALLBACK FOR NEWLY-LISTED ASSETS: regime_ma is NaN (and NaN
+# comparisons are always False in pandas) for the first 200 days of ANY
+# asset's OWN history -- without a fix, a newly-listed, more speculative
+# coin would be fully locked out of trading for its first ~200 days,
+# exactly when its first big move is most likely. Fixed with an OR:
+# (regime confirms) OR (not enough history to judge it at all). Verified
+# this wasn't just a theoretical edge case -- SOL-USD and AVAX-USD,
+# already in this watchlist, only started trading in 2020 and were
+# actually affected by this within the 2019-2024 and 2020-2022 windows
+# (2023-2026 unaffected -- both were long past 200 days old by then).
+# The numbers above already reflect the fix.
 #
 # HONEST TRADEOFFS, not just headline numbers (8-asset watchlist, DOGE
-# removed, DOT/UNI/BCH/FIL rejected, 200-day regime filter added):
-#   - 2019-2024: 6177.45% total / 99.45%/yr / -44.24% DD / SQN 4.139
-#   - 2020-2022 crisis: 970.35% total / 150.48%/yr / -41.79% DD / SQN 3.186
-#   - 2023-2026 crisis: 148.7% total / 28.8%/yr / -37.93% DD / SQN 1.809
+# removed, DOT/UNI/BCH/FIL rejected, 200-day regime filter + OR fallback):
+#   - 2019-2024: 6881.94% total / 103.02%/yr / -44.24% DD
+#   - 2020-2022 crisis: 893.83% total / 143.38%/yr / -41.79% DD
+#   - 2023-2026 crisis: 148.7% total / 28.8%/yr / -37.93% DD
 #   - Even with the regime filter, return is still concentrated in a
 #     handful of outlier trades (a huge SOL 2023-2024 run, an early BTC
 #     2020-2021 trade) -- treat the headline annualized numbers as "what
