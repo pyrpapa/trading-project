@@ -102,6 +102,24 @@
 # watchlist, plausibly why it added real value where AAVE/CRV/LDO
 # (correlated to what's already here) didn't.
 #
+# AVAX/LTC/ADA DROPPED (leave-one-out analysis on the 9-asset
+# watchlist -- removed each of SOL/XRP/LTC/ADA/AVAX/LINK/RENDER one at
+# a time, all three windows, comparing against the full 9-asset
+# baseline). SOL, XRP, and LINK all showed real, substantial value
+# (especially in the 2 bigger windows) and were kept. AVAX was the
+# clearest "cut this" signal of the whole session -- removing it
+# improved BOTH return and drawdown in all three windows, not a mixed
+# picture. LTC and ADA showed the same direction more softly (better or
+# essentially neutral everywhere, never a clear net-positive
+# contributor). Tested dropping all three TOGETHER (not just
+# individually) -- the combined effect compounded, better than any
+# single removal alone suggested (e.g. 2019-2024 total return went to
+# 15385.55%, higher than removing AVAX alone gave on its own,
+# 14575.25%) -- less capital tied up in the weaker performers left more
+# room for SOL/XRP/LINK/RENDER/BTC/ETH to size up. Improved return AND
+# drawdown in all three windows, the same clean signature the regime
+# filter and RENDER's addition both had.
+#
 # OR FALLBACK FOR NEWLY-LISTED ASSETS: regime_ma is NaN (and NaN
 # comparisons are always False in pandas) for the first
 # regime_filter_period days of ANY asset's OWN history -- without a
@@ -117,9 +135,9 @@
 #
 # HONEST TRADEOFFS, not just headline numbers (8-asset watchlist, DOGE
 # removed, DOT/UNI/BCH/FIL rejected, 150-day regime filter + OR fallback):
-#   - 2019-2024: 13380.59% total / 126.57%/yr / -46.46% DD
-#   - 2020-2022 crisis: 1062.56% total / 158.62%/yr / -45.35% DD
-#   - 2023-2026 crisis: 202.31% total / 35.97%/yr / -36.92% DD
+#   - 2019-2024: 15385.55% total / 131.87%/yr / -43.05% DD
+#   - 2020-2022 crisis: 1168.48% total / 167.51%/yr / -42.78% DD
+#   - 2023-2026 crisis: 280.71% total / 44.96%/yr / -35.01% DD
 #   - Even with the regime filter, return is still concentrated in a
 #     handful of outlier trades (a huge SOL 2023-2024 run, an early BTC
 #     2020-2021 trade) -- treat the headline annualized numbers as "what
@@ -162,9 +180,6 @@ watchlist:
   - ETH-USD
   - SOL-USD
   - XRP-USD
-  - LTC-USD
-  - ADA-USD
-  - AVAX-USD
   - LINK-USD
   - RENDER-USD
 
