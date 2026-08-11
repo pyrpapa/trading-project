@@ -1,0 +1,59 @@
+# EXPERIMENTAL v26 -- master's 8-asset watchlist (v25 minus DOGE) with 4
+# candidate additions: DOT, UNI, BCH, FIL. All 4 confirmed tradable on
+# Alpaca AND with solid price history (checked directly before building
+# this) -- deliberately chosen as established, utility/DeFi-driven
+# assets, not another meme coin, given DOGE was just removed specifically
+# for being hype-dependent rather than fundamentals-driven.
+#
+# Checked and rejected before this file existed (either untradable on
+# Alpaca despite having price history, or too little history):
+# MATIC, ATOM, ETC, TRX, NEAR, ALGO, XLM (all untradable on Alpaca),
+# POL (data ends Oct 2023, superseded by MATIC's rebrand).
+#
+# Compare against master (8 assets, no DOGE) on the same window:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v26_crypto_candidates.yaml --chart --save --label "v26-candidates"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+  - DOT-USD
+  - UNI-USD
+  - BCH-USD
+  - FIL-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
