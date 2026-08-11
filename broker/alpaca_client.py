@@ -16,6 +16,27 @@ alpaca-trade-api package is deprecated).
 import os
 
 
+def _is_crypto(ticker: str) -> bool:
+    """Canonical (yfinance-style) crypto tickers always look like 'BTC-USD'."""
+    return "-" in ticker
+
+
+def _to_alpaca_symbol(ticker: str) -> str:
+    """
+    Alpaca and yfinance use different symbol formats for crypto: this
+    project's configs/data layer use yfinance's 'BTC-USD' (hyphen)
+    throughout, but Alpaca's own symbol is 'BTC/USD' (slash) -- confirmed
+    directly via client.get_asset('BTC/USD').symbol. Equities/ETFs are
+    unaffected (no hyphen, passed through unchanged).
+    """
+    return ticker.replace("-", "/") if _is_crypto(ticker) else ticker
+
+
+def _from_alpaca_symbol(symbol: str) -> str:
+    """Inverse of _to_alpaca_symbol, for translating broker responses back."""
+    return symbol.replace("/", "-") if "/" in symbol else symbol
+
+
 class AlpacaBroker:
     def __init__(self, api_key: str = None, secret_key: str = None, paper: bool = None):
         api_key = api_key or os.environ.get("ALPACA_API_KEY")
@@ -58,10 +79,10 @@ class AlpacaBroker:
         }
 
     def get_positions(self) -> dict:
-        """Returns {ticker: {qty, avg_entry_price, market_value, unrealized_plpc}}"""
+        """Returns {ticker: {qty, avg_entry_price, market_value, unrealized_plpc}}, ticker in canonical (yfinance-style) format."""
         positions = self.client.get_all_positions()
         return {
-            p.symbol: {
+            _from_alpaca_symbol(p.symbol): {
                 "qty": float(p.qty),
                 "avg_entry_price": float(p.avg_entry_price),
                 "market_value": float(p.market_value),
@@ -72,15 +93,21 @@ class AlpacaBroker:
 
     def submit_market_order(self, symbol: str, notional_usd: float = None, qty: float = None, side: str = "buy"):
         """
-        Submit a market order. Provide either notional_usd (dollar amount,
-        supports fractional shares) or qty (number of shares).
+        Submit a market order. `symbol` is canonical (yfinance-style,
+        e.g. 'BTC-USD' for crypto) -- translated to Alpaca's own format
+        internally. Provide either notional_usd (dollar amount, supports
+        fractional shares) or qty (number of shares).
         """
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
         order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        # Crypto trades 24/7 -- "day" has no clean meaning there (no
+        # market close for an order to expire against), so use GTC for
+        # crypto specifically. Equities keep DAY, unchanged.
+        tif = TimeInForce.GTC if _is_crypto(symbol) else TimeInForce.DAY
 
-        kwargs = dict(symbol=symbol, side=order_side, time_in_force=TimeInForce.DAY)
+        kwargs = dict(symbol=_to_alpaca_symbol(symbol), side=order_side, time_in_force=tif)
         if notional_usd is not None:
             kwargs["notional"] = round(notional_usd, 2)
         elif qty is not None:
@@ -89,8 +116,9 @@ class AlpacaBroker:
             raise ValueError("Must provide either notional_usd or qty")
 
         order = self.client.submit_order(MarketOrderRequest(**kwargs))
-        return {"id": str(order.id), "symbol": order.symbol, "side": side, "status": str(order.status)}
+        return {"id": str(order.id), "symbol": _from_alpaca_symbol(order.symbol), "side": side, "status": str(order.status)}
 
     def close_position(self, symbol: str):
-        order = self.client.close_position(symbol)
+        """`symbol` is canonical (yfinance-style) -- translated internally."""
+        order = self.client.close_position(_to_alpaca_symbol(symbol))
         return {"id": str(order.id), "symbol": symbol, "status": str(order.status)}
