@@ -1,0 +1,61 @@
+# EXPERIMENTAL v25 -- crypto_master's exact signal/sizing (BTC/ETH,
+# risk_pct_per_unit 1.5) with the watchlist expanded to 9 liquid,
+# Alpaca-tradable cryptocurrencies instead of just 2. Same question
+# already asked and answered for equities (v15/v18: more tickers within
+# a correlated asset class diluted returns and didn't meaningfully
+# improve drawdown) -- testing whether the same holds for crypto, or
+# whether crypto's generally lower cross-asset correlation among
+# alt-coins (relative to how tightly US large-cap equities correlate)
+# changes the answer.
+#
+# All 9 confirmed tradable on Alpaca and with sufficient price history
+# for the 2019-2024 window (checked directly before building this) --
+# SOL/AVAX only have data from 2020, so they're naturally absent from
+# the earliest part of this window (engine.py already handles a ticker
+# with no data yet for early dates, same as any other fixed-watchlist
+# gap).
+#
+# Compare against crypto_master (BTC/ETH only) on the same window:
+#   python run_backtest.py --config config/strategy_crypto_master.yaml --chart --save --label "crypto-master-compare"
+#   python run_backtest.py --config config/strategy_v25_crypto_expanded.yaml --chart --save --label "v25-crypto-expanded"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - DOGE-USD
+  - AVAX-USD
+  - LINK-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
