@@ -1,0 +1,52 @@
+# v31, tested against 2020-2022 -- note RENDER's data starts almost
+# exactly at this window's 2020-06-01 start (minimal pre-history), and
+# LDO doesn't exist until 2021-01, well into the window -- both trade
+# under the OR-fallback plain crossover rule for a while before having
+# a real regime average, same as SOL/AVAX were in the master backtest.
+#   python run_backtest.py --config config/strategy_v27_regime_filter_crisis_2022.yaml --chart --save --label "master-crisis-2022-compare"
+#   python run_backtest.py --config config/strategy_v31_defi_candidates_crisis_2022.yaml --chart --save --label "v31-defi-candidates-crisis-2022"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+  - AAVE-USD
+  - CRV-USD
+  - LDO-USD
+  - RENDER-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2020-06-01"
+  end_date: "2022-12-31"
+  commission_pct: 0.0

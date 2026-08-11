@@ -1,0 +1,64 @@
+# EXPERIMENTAL v31 -- master's 8-asset base + 4 new candidates (AAVE,
+# CRV, LDO, RENDER), all confirmed tradable on Alpaca with clean yfinance
+# data. Different rationale from v26/v28's DOT/UNI/BCH/FIL: these were
+# picked to span genuinely different drivers (DeFi lending, DEX/stablecoin
+# infrastructure, ETH liquid staking, AI/GPU compute) rather than being
+# a generic "more established coins" grab -- v26/v28 already showed that
+# doesn't work on its own.
+#
+# Data depth varies (checked before building this): AAVE from 2020-10,
+# CRV from 2020-08, RENDER from 2020-06 (right at the 2020-2022 crisis
+# window's own start -- minimal pre-history there), LDO from 2021-01
+# (well into that window). All four have 150+ days of history well
+# before 2023, so the 2023-2026 window is clean for all of them. The
+# OR-fallback fix (see strategy/rules.py) means none of them are locked
+# out during their own early history -- they just trade under the plain
+# crossover+volume rule until old enough to have a real regime average.
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v31_defi_candidates.yaml --chart --save --label "v31-defi-candidates"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+  - AAVE-USD
+  - CRV-USD
+  - LDO-USD
+  - RENDER-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
