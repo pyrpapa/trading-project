@@ -1,0 +1,56 @@
+# EXPERIMENTAL v24 -- master_strategy's exact signal (entry/exit/sizing/
+# pyramiding, byte-identical) applied to BTC-USD and ETH-USD instead of
+# equities. Direct test of the hypothesis that the entry/exit machinery's
+# risk-reduction edge matters more on a genuinely volatile, different-
+# in-character asset -- not just a leveraged version of the same stocks
+# (see v22/v23's leveraged ETF results, which already showed this
+# pattern: the active strategy's edge over buy-and-hold became far more
+# consequential as instrument volatility increased).
+#
+# NO CRISIS-WINDOW VARIANT: BTC-USD/ETH-USD have no usable price history
+# before 2019 via this project's data source -- same permanent
+# limitation already documented for leveraged ETFs. This result can only
+# ever be validated against the calm/bull 2019-2024 window. Crypto has
+# had its own severe crashes (2018, 2022) that could serve as an
+# alternative stress test, but that's a separate, not-yet-built
+# experiment, not a substitute for the crisis-window discipline used
+# everywhere else in this project.
+#
+# Compare against master_strategy and crypto buy-and-hold on the same
+# window:
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v24_crypto.yaml --chart --save --label "v24-crypto"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
