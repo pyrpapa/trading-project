@@ -1,0 +1,61 @@
+# EXPERIMENTAL v29 -- retest of v19's "let it ride" bundle (wider
+# stops, slower Donchian exit, faster/bigger pyramiding), which was
+# REJECTED on equities (made both return and drawdown worse there).
+# Never tested on crypto at all until now, and now WITH the regime
+# filter active, which v19 never had either. Two things changing at
+# once vs the crypto baseline (new asset class AND regime filter) --
+# less clean isolation than v28's retest, but the goal here is
+# specifically "does this rejected IDEA behave differently once
+# whipsaw is screened out," not a pure single-variable test.
+#
+# Same changes as v19, applied to master's 8-asset crypto base:
+#   stop_atr_multiple:    2.0 -> 3.0
+#   exit_breakout_period:  10 -> 20
+#   pyramid unit_interval_n: 0.5 -> 0.3
+#   pyramid max_units:        4 -> 6
+# risk_pct_per_unit left at 1.5 (already bumped from the crypto
+# baseline's own tuning, not touched again here).
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v29_let_it_ride_regime_filter.yaml --chart --save --label "v29-let-it-ride-regime-filter"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 200
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 20
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 3.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.3
+    max_units: 6
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
