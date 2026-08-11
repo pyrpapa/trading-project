@@ -171,9 +171,22 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     # average. Applied as an additional AND on top of whatever entry_type
     # produced, independent of which entry rule is active -- same
     # composability discipline as every other independent config knob.
+    #
+    # OR fallback for assets too new to have regime_filter_period days of
+    # history yet: regime_ma is NaN for that entire stretch, and NaN
+    # comparisons are always False in pandas -- without this fallback, a
+    # newly-listed, more speculative asset would be fully locked out of
+    # trading for its first ~regime_filter_period days, exactly the
+    # window where its first big move is most likely to happen. Applied
+    # as (regime confirms) OR (not enough history to judge it at all) --
+    # an established asset still has to clear the filter; a brand-new one
+    # falls back to the plain crossover+volume signal until it's old
+    # enough to have an opinion.
     regime_filter_period = entry_cfg.get("regime_filter_period")
     if regime_filter_period:
-        buy_signal = buy_signal & (df["Close"] > df["regime_ma"])
+        regime_confirmed = df["Close"] > df["regime_ma"]
+        regime_unavailable = df["regime_ma"].isna()
+        buy_signal = buy_signal & (regime_confirmed | regime_unavailable)
 
     # Trend-exit signal. exit.type selects HOW it's detected; exit.ma_exit
     # still gates whether any trend-exit is active at all (independent of
