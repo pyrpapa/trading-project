@@ -34,28 +34,39 @@ from strategy import rules, journal, correlation, portfolio_selection
 from broker.alpaca_client import AlpacaBroker
 
 
-def _stop_price_for_open_position(store, ticker, entry_price, qty, sizing_method, cfg):
+def _stack_stop_price(open_units, avg_entry_price, sizing_method, cfg):
     """
-    Reconstructs the stop price for an already-open position, so the exit
-    check works the same way live as it does in the backtester.
+    Reconstructs the stop price for an already-open position (possibly a
+    PYRAMIDED STACK of several units, each bought at a different price
+    with its own risk), so the exit check works the same way live as it
+    does in the backtester.
 
-    Flat-% sizing (pct mode) is derivable from config alone. N-based sizing
-    (atr_unit mode) fixed the stop at whatever N was on the day the
-    position was opened, so it has to be looked up from the trade record
-    Supabase saved at entry time — there's no way to recompute "N as of
-    entry day" from today's data alone.
+    Flat-% sizing (pct mode) is derivable from config alone -- always a
+    single conceptual "unit" (pyramiding requires atr_unit sizing; see
+    pyramiding_enabled in main()). N-based sizing (atr_unit mode) fixed
+    each unit's own stop at whatever N was on the day THAT unit was
+    added, so it has to be looked up from the trade records Supabase
+    saved at entry time -- there's no way to recompute "N as of entry
+    day" from today's data alone.
+
+    Mirrors backtest/engine.py's pyramid-add block exactly: the whole
+    stack shares ONE stop, trailed up (never down) to the tightest unit
+    -- i.e. the MAX across every open unit's own (entry_price -
+    risk_per_share). For a single non-pyramided unit this reduces to
+    exactly the old single-unit calculation.
     """
     if sizing_method == "atr_unit":
-        if store is None:
-            return None  # no Supabase credentials — can't reconstruct, see caller
-        open_trade = store.find_open_trade(ticker, source="paper")
-        if open_trade and open_trade.get("initial_risk_dollars") and qty:
-            risk_per_share = open_trade["initial_risk_dollars"] / qty
-            return entry_price - risk_per_share
-        return None
+        if not open_units:
+            return None  # no Supabase records — can't reconstruct, see caller
+        stops = [
+            u["entry_price"] - (u["initial_risk_dollars"] / u["shares"])
+            for u in open_units
+            if u.get("initial_risk_dollars") and u.get("shares")
+        ]
+        return max(stops) if stops else None
 
     stop_loss_pct = cfg["exit"].get("stop_loss_pct")
-    return entry_price * (1 - stop_loss_pct / 100) if stop_loss_pct else None
+    return avg_entry_price * (1 - stop_loss_pct / 100) if stop_loss_pct else None
 
 
 def main():
@@ -90,6 +101,19 @@ def main():
     ps_lookback = ps_cfg.get("lookback_period", 90)
     ps_method = ps_cfg.get("method", "correlation")
 
+    # Pyramiding (Turtle-style: add units to an already-open, winning
+    # position as price moves further in its favor). Requires atr_unit
+    # sizing, same gate as backtest/engine.py. Previously this had NO
+    # live implementation at all -- the entry loop unconditionally
+    # skipped any ticker already held, so a config with pyramiding
+    # enabled (like strategy_master.yaml) silently ran as single-entry-
+    # only in live/paper trading despite every backtest result assuming
+    # pyramid adds were happening. Fixed below.
+    pyramid_cfg = cfg["risk"].get("pyramiding") or {}
+    pyramiding_enabled = pyramid_cfg.get("enabled", False) and sizing_method == "atr_unit"
+    pyramid_unit_interval_n = pyramid_cfg.get("unit_interval_n", 0.5)
+    pyramid_max_units = pyramid_cfg.get("max_units", 4)
+
     print(f"{'[DRY RUN] ' if dry_run else ''}Live check — {dt.date.today()}")
 
     broker = AlpacaBroker()
@@ -97,6 +121,19 @@ def main():
     positions = broker.get_positions()
     print(f"Account equity: ${account['equity']:,.2f} | Cash: ${account['cash']:,.2f}")
     print(f"Open positions: {list(positions.keys()) or 'none'}")
+
+    # Running budget trackers, updated after EVERY action (exit, pyramid
+    # add, or fresh entry) taken during this run -- mirrors
+    # backtest/engine.py recomputing cash/invested_value after each
+    # action instead of using one stale snapshot for the whole run.
+    # portfolio_value itself doesn't need to be tracked as running state:
+    # buying/selling converts cash<->position value 1:1 with no net
+    # change to total equity from the trade itself (only real P&L moves
+    # it, which isn't being re-marked mid-run) -- same invariant the
+    # backtest relies on.
+    portfolio_value = account["equity"]
+    cash_remaining = account["cash"]
+    invested_value = sum(p["market_value"] for p in positions.values())
 
     # Created whenever credentials exist, even in --dry-run, so N-based
     # stop reconstruction (see _stop_price_for_open_position) can still
@@ -149,6 +186,11 @@ def main():
     exited_tickers = set()
 
     # --- Check exits on open positions ---
+    # A pyramided stack always exits TOGETHER as one real sell order (the
+    # broker only ever sees one aggregate position) -- but is logged as
+    # SEVERAL closed trade records, one per unit, each with its OWN pnl/
+    # R-multiple based on that unit's own entry price and shares, same
+    # "whole stack exits together" invariant backtest/engine.py uses.
     for ticker, pos in positions.items():
         if ticker not in tickers:
             continue  # position not managed by this strategy
@@ -161,10 +203,11 @@ def main():
         entry_price = pos["avg_entry_price"]
         change_pct = (current_price - entry_price) / entry_price * 100
 
-        stop_price = _stop_price_for_open_position(store, ticker, entry_price, pos["qty"], sizing_method, cfg)
+        open_units = store.find_open_trades(ticker, source="paper") if store else []
+        stop_price = _stack_stop_price(open_units, entry_price, sizing_method, cfg)
         if sizing_method == "atr_unit" and stop_price is None:
             print(f"  Note: {ticker} used N-based sizing but its stop couldn't be "
-                  f"reconstructed (no Supabase trade record found) — stop-loss check skipped this run.")
+                  f"reconstructed (no Supabase trade record(s) found) — stop-loss check skipped this run.")
 
         exit_reason = None
         trend_reason = None
@@ -177,27 +220,107 @@ def main():
             trend_reason = sig_df["reason"].iloc[-1]
 
         if exit_reason:
-            pnl = (current_price - entry_price) * pos["qty"]
-            risk_per_share = (entry_price - stop_price) if stop_price is not None else None
-            initial_risk_dollars = risk_per_share * pos["qty"] if risk_per_share else None
-            r_multiple = pnl / initial_risk_dollars if initial_risk_dollars else None
-
+            pnl = (current_price - entry_price) * pos["qty"]  # whole-position P&L, for the human-readable log line only
             exit_reason_detail = journal.exit_reason_text(exit_reason, cfg, trend_reason=trend_reason)
-            exit_log = journal.format_exit(ticker, current_price, change_pct, exit_reason_detail, r_multiple=r_multiple)
-            print(f"  EXIT {ticker}: {change_pct:+.2f}% ({exit_reason})")
+            exit_log = journal.format_exit(ticker, current_price, change_pct, exit_reason_detail, r_multiple=None)
+            print(f"  EXIT {ticker}: {change_pct:+.2f}% ({exit_reason}, {len(open_units) or 1} unit(s))")
             print(f"    {exit_log}")
             actions.append(("SELL", ticker, exit_reason_detail, current_price))
             exited_tickers.add(ticker)
+            cash_remaining += pos["market_value"]
+            invested_value -= pos["market_value"]
             if not dry_run:
                 broker.close_position(ticker)
                 if store:
-                    open_trade = store.find_open_trade(ticker, source="paper")
-                    if open_trade:
-                        store.close_trade(
-                            open_trade["id"], exit_date=dt.date.today(), exit_price=current_price,
-                            pnl=pnl, return_pct=change_pct, exit_reason=exit_reason,
-                            exit_reason_detail=exit_reason_detail, exit_log=exit_log, r_multiple=r_multiple,
+                    # open_units already covers this (find_open_trades has no
+                    # unit_number filter, so it returns single-unit positions
+                    # too -- the migration backfills unit_number=1 for any
+                    # pre-existing rows).
+                    for unit in open_units:
+                        unit_pnl = (current_price - unit["entry_price"]) * unit["shares"]
+                        unit_r = (
+                            unit_pnl / unit["initial_risk_dollars"]
+                            if unit.get("initial_risk_dollars") else None
                         )
+                        store.close_trade(
+                            unit["id"], exit_date=dt.date.today(), exit_price=current_price,
+                            pnl=unit_pnl, return_pct=change_pct, exit_reason=exit_reason,
+                            exit_reason_detail=exit_reason_detail, exit_log=exit_log, r_multiple=unit_r,
+                        )
+
+    # --- Pyramid adds on remaining open stacks -- a PURE PRICE THRESHOLD
+    # check, not a fresh entry signal, same as backtest/engine.py's
+    # pyramid-add block: add one more unit every unit_interval_n * N the
+    # price has moved further in the position's favor since the LAST
+    # unit's own entry, up to max_units total, sized at CURRENT
+    # volatility (N). Requires Supabase (source of truth for each unit's
+    # own entry price/risk -- Alpaca only exposes one blended average
+    # across the whole position, not individual units), so this silently
+    # does nothing without it, same fail-safe pattern as the stop-loss
+    # reconstruction above.
+    if pyramiding_enabled and store:
+        for ticker, pos in positions.items():
+            if ticker not in tickers or ticker in exited_tickers:
+                continue
+            df = get_price_history(ticker)
+            if df is None:
+                continue
+            sig_df = rules.generate_signals(df, cfg)
+            atr = sig_df["atr"].iloc[-1] if "atr" in sig_df.columns else None
+            if atr is None or pd.isna(atr) or atr <= 0:
+                continue
+            current_price = df["Close"].iloc[-1]
+
+            open_units = store.find_open_trades(ticker, source="paper")
+            if not open_units:
+                print(f"  Note: {ticker} has pyramiding enabled but no Supabase unit "
+                      f"record(s) found — pyramid-add check skipped this run.")
+                continue
+            if len(open_units) >= pyramid_max_units:
+                continue
+
+            last_unit = open_units[-1]
+            threshold_price = last_unit["entry_price"] + pyramid_unit_interval_n * atr
+            if current_price < threshold_price:
+                continue
+
+            stop_atr_multiple = cfg["risk"]["stop_atr_multiple"]
+            risk_pct_per_unit = cfg["risk"]["risk_pct_per_unit"]
+            risk_per_share = stop_atr_multiple * atr
+            dollar_risk_budget = portfolio_value * (risk_pct_per_unit / 100)
+            atr_allocation = (dollar_risk_budget / risk_per_share) * current_price
+
+            stack_value = pos["market_value"]  # today's mark on the WHOLE existing stack
+            max_position_value = portfolio_value * max_position_pct
+            room_in_position = max_position_value - stack_value
+            room_left = (portfolio_value * max_invested_pct) - invested_value
+            allocation = min(atr_allocation, room_in_position, room_left, cash_remaining)
+
+            if allocation <= 1:
+                continue
+
+            shares = allocation / current_price
+            unit_number = len(open_units) + 1
+            initial_risk_dollars = risk_per_share * shares
+            sizing_note = (
+                f"pyramid unit sized to risk {risk_pct_per_unit:.1f}% of equity "
+                f"(N=${atr:.2f}, stop {stop_atr_multiple:.1f}N away)"
+            )
+            add_reason = journal.pyramid_add_reason_text(unit_number, pyramid_max_units, pyramid_unit_interval_n)
+            add_log = journal.format_pyramid_add(ticker, unit_number, pyramid_max_units, current_price, sizing_note=sizing_note)
+            print(f"  PYRAMID ADD {ticker}: unit {unit_number}/{pyramid_max_units}, ${allocation:,.2f} @ ~${current_price:.2f}")
+            print(f"    {add_log}")
+            actions.append(("BUY", ticker, add_reason, current_price))
+            if not dry_run:
+                broker.submit_market_order(ticker, notional_usd=allocation, side="buy")
+                store.open_trade(
+                    ticker, entry_date=dt.date.today(), entry_price=current_price, shares=shares,
+                    source="paper", entry_reason=add_reason, entry_log=add_log,
+                    sizing_method=sizing_method, initial_risk_dollars=initial_risk_dollars,
+                    unit_number=unit_number,
+                )
+            cash_remaining -= allocation
+            invested_value += allocation
 
     # --- Portfolio selection: which candidates are eligible for NEW
     # entries today (see strategy/portfolio_selection.py). Unlike the
@@ -229,7 +352,7 @@ def main():
 
     # --- Check entries for tickers not currently held ---
     for ticker in tickers:
-        if ticker in positions:
+        if ticker in positions and ticker not in exited_tickers:
             continue
         if ps_enabled and ticker not in active_tickers:
             continue
@@ -252,8 +375,6 @@ def main():
                 continue
 
         current_price = df["Close"].iloc[-1]
-        invested_value = sum(p["market_value"] for p in positions.values())
-        portfolio_value = account["equity"]
 
         max_position_value = portfolio_value * max_position_pct
         room_left = (portfolio_value * max_invested_pct) - invested_value
@@ -267,13 +388,13 @@ def main():
             risk_per_share = stop_atr_multiple * atr
             dollar_risk_budget = portfolio_value * (risk_pct_per_unit / 100)
             atr_allocation = (dollar_risk_budget / risk_per_share) * current_price
-            allocation = min(atr_allocation, max_position_value, room_left, account["cash"])
+            allocation = min(atr_allocation, max_position_value, room_left, cash_remaining)
             sizing_note = (
                 f"sized to risk {risk_pct_per_unit:.1f}% of equity "
                 f"(N=${atr:.2f}, stop {stop_atr_multiple:.1f}N away)"
             )
         else:
-            allocation = min(max_position_value, room_left, account["cash"])
+            allocation = min(max_position_value, room_left, cash_remaining)
 
         if allocation <= 1:  # not worth trading under $1
             print(f"  Skipping BUY {ticker}: no allocation room left")
@@ -296,8 +417,10 @@ def main():
                 store.open_trade(
                     ticker, entry_date=dt.date.today(), entry_price=current_price, shares=shares,
                     source="paper", entry_reason=entry_reason, entry_log=entry_log,
-                    sizing_method=sizing_method, initial_risk_dollars=initial_risk_dollars,
+                    sizing_method=sizing_method, initial_risk_dollars=initial_risk_dollars, unit_number=1,
                 )
+        cash_remaining -= allocation
+        invested_value += allocation
 
     if not actions:
         print("No actions today.")

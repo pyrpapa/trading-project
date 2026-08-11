@@ -93,7 +93,7 @@ class SupabaseStore:
     def open_trade(
         self, ticker: str, entry_date, entry_price: float, shares: float, source: str = "paper",
         entry_reason: str = None, entry_log: str = None,
-        sizing_method: str = None, initial_risk_dollars: float = None,
+        sizing_method: str = None, initial_risk_dollars: float = None, unit_number: int = 1,
     ) -> dict:
         row = {
             "ticker": ticker,
@@ -105,6 +105,7 @@ class SupabaseStore:
             "entry_log": entry_log,
             "sizing_method": sizing_method,
             "initial_risk_dollars": float(initial_risk_dollars) if initial_risk_dollars is not None else None,
+            "unit_number": unit_number,
         }
         result = self.client.table("trades").insert(row).execute()
         return result.data[0] if result.data else None
@@ -138,6 +139,27 @@ class SupabaseStore:
             .execute()
         )
         return result.data[0] if result.data else None
+
+    def find_open_trades(self, ticker: str, source: str = "paper") -> list:
+        """
+        All currently-open trade rows for a ticker, ordered oldest-first
+        (unit_number ascending) -- reconstructs a pyramided position's
+        full "stack" (see live/run_live.py), not just its most recent
+        unit. Returns [] if none found (e.g. Supabase has no record of a
+        position the broker shows as open -- caller should treat that as
+        "can't safely reconstruct" the same way a missing find_open_trade
+        result already does for stop-loss checks).
+        """
+        result = (
+            self.client.table("trades")
+            .select("*")
+            .eq("ticker", ticker)
+            .eq("source", source)
+            .is_("exit_date", "null")
+            .order("unit_number", desc=False)
+            .execute()
+        )
+        return result.data or []
 
     def save_account_snapshot(self, equity: float, cash: float, portfolio_value: float, buying_power: float, mode: str = "paper") -> dict:
         row = {
