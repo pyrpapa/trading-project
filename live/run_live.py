@@ -122,6 +122,23 @@ def main():
     print(f"Account equity: ${account['equity']:,.2f} | Cash: ${account['cash']:,.2f}")
     print(f"Open positions: {list(positions.keys()) or 'none'}")
 
+    # Orphan check: a held position whose ticker isn't anywhere in this
+    # config's watchlist/candidate_universe won't be touched by ANYTHING
+    # below -- not exits, not pyramid-adds, nothing -- because every loop
+    # filters on `ticker in tickers` first. That's silent and permanent
+    # (it'll stay orphaned every future run too, not just this one) unless
+    # you switch back to a config that covers it or close it yourself.
+    # This is expected/normal for a ticker that's in the watchlist but
+    # temporarily outside portfolio_selection's currently-active subset
+    # (still gets exit-checked, just not eligible for new entries) --
+    # this only flags tickers missing from the config ENTIRELY.
+    orphaned = set(positions.keys()) - set(tickers)
+    if orphaned:
+        print(f"  WARNING: holding {sorted(orphaned)} but this config's watchlist doesn't "
+              f"include them -- these position(s) will NOT be checked for exits, stops, "
+              f"or pyramid-adds by this run. Switch to a config that covers them, or close "
+              f"them manually, if that's not intentional.")
+
     # Running budget trackers, updated after EVERY action (exit, pyramid
     # add, or fresh entry) taken during this run -- mirrors
     # backtest/engine.py recomputing cash/invested_value after each
