@@ -70,6 +70,7 @@ def main():
     lookback_days = max(
         cfg["entry"]["ma_period"], cfg["entry"]["volume_ma_period"],
         cfg["entry"].get("breakout_period", 0),
+        cfg["entry"].get("regime_filter_period", 0),
         cfg.get("exit", {}).get("exit_breakout_period", 0),
         cfg.get("risk", {}).get("atr_period", 20),
         cfg["portfolio_selection"].get("lookback_period", 0) if ps_enabled else 0,

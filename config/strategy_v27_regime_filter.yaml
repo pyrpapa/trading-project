@@ -1,0 +1,63 @@
+# EXPERIMENTAL v27 -- master_strategy's exact mechanics (8-asset crypto,
+# ATR sizing, pyramiding, Donchian exit) with a NEW opt-in feature:
+# entry.regime_filter_period. Requires price to be above a 200-day
+# moving average (in addition to the existing 20-day crossover +
+# volume confirmation) before taking an entry -- don't take the fast
+# signal unless the slow, macro trend agrees. Direct response to the
+# 2023-2026 crisis window's whipsaw problem (292 trades, 31.85% win
+# rate, SQN 2.122) -- see strategy_master_crisis_2026.yaml.
+#
+# Verified in a sandbox test before trusting it (same discipline as
+# every new feature this session): confirmed the filter correctly
+# blocks crossovers that happen while price is still below the slower
+# regime average, and only allows crossovers once the longer-term
+# trend has genuinely confirmed.
+#
+# Tested against ALL FOUR windows this project now has for crypto, not
+# just the one it's aimed at fixing -- a filter that only helps in the
+# window it was designed for, at the cost of the others, isn't
+# actually an improvement.
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v27_regime_filter.yaml --chart --save --label "v27-regime-filter"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LTC-USD
+  - ADA-USD
+  - AVAX-USD
+  - LINK-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 200
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

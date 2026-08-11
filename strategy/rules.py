@@ -20,6 +20,18 @@ def add_indicators(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     df["ma"] = df["Close"].rolling(ma_period).mean()
     df["volume_ma"] = df["Volume"].rolling(vol_period).mean()
 
+    # Regime filter (optional, opt-in via entry.regime_filter_period) --
+    # a much slower moving average than the entry ma_period. When set,
+    # the fast crossover entry additionally requires price to be above
+    # THIS slower average too -- don't take the fast signal unless the
+    # macro trend agrees. Only computed when configured (unlike
+    # donchian/atr above) since its period is typically much longer
+    # (e.g. 200 days) and would otherwise inflate the warm-up buffer
+    # for every config, not just ones that use it.
+    regime_filter_period = entry_cfg.get("regime_filter_period")
+    if regime_filter_period:
+        df["regime_ma"] = df["Close"].rolling(regime_filter_period).mean()
+
     # Donchian channel high — the highest High over the `breakout_period`
     # days BEFORE today (shift(1) excludes today itself, so today's own
     # high can't count toward its own breakout threshold — no lookahead).
@@ -74,6 +86,9 @@ def entry_reason_text(cfg: dict) -> str:
             f", with volume above its {entry_cfg['volume_ma_period']}-day "
             "average (volume confirmation)"
         )
+    regime_filter_period = entry_cfg.get("regime_filter_period")
+    if regime_filter_period:
+        reason += f", with price above its {regime_filter_period}-day regime-filter average"
     return reason
 
 
@@ -150,6 +165,15 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         # Buy signal: price crosses above MA (wasn't above yesterday) + volume confirms
         crossed_up = above_ma & (~above_ma.shift(1).fillna(False))
         buy_signal = crossed_up & vol_ok
+
+    # Regime filter (optional, see add_indicators) -- don't take the fast
+    # entry signal unless price is ALSO above a much slower moving
+    # average. Applied as an additional AND on top of whatever entry_type
+    # produced, independent of which entry rule is active -- same
+    # composability discipline as every other independent config knob.
+    regime_filter_period = entry_cfg.get("regime_filter_period")
+    if regime_filter_period:
+        buy_signal = buy_signal & (df["Close"] > df["regime_ma"])
 
     # Trend-exit signal. exit.type selects HOW it's detected; exit.ma_exit
     # still gates whether any trend-exit is active at all (independent of
