@@ -82,6 +82,26 @@
 # -- wider stops/slower exit still hurt). Confirms those are real,
 # independent findings, not artifacts of unfiltered whipsaw.
 #
+# RENDER-USD ADDED (config/strategy_v31_defi_candidates.yaml tested
+# AAVE/CRV/LDO/RENDER bundled together and was REJECTED -- worse
+# drawdown in all three windows despite the 4 picks spanning genuinely
+# different drivers: DeFi lending, DEX infrastructure, ETH liquid
+# staking, AI/GPU compute). Bundling masked a real individual winner --
+# tested each of the 4 ADDED ALONE afterward: AAVE, CRV, and LDO were
+# all clear rejections individually too (worse than the 8-asset
+# baseline on every metric, every window -- unsurprising in hindsight,
+# AAVE and LDO both correlate heavily with ETH, already in the
+# watchlist, so they add correlated exposure more than real
+# diversification). RENDER alone was different: beat the 8-asset
+# baseline on return AND SQN in all three windows, and even improved
+# drawdown in 2023-2026 (-36.92% vs -38.82%) -- the only ticker-
+# addition experiment all session to show a genuine, consistent,
+# multi-window win. Cost: modestly worse drawdown in the other two
+# windows (~3-5 points). RENDER's AI/GPU-compute driver is genuinely
+# distinct from the L1/DeFi/staking character of the rest of the
+# watchlist, plausibly why it added real value where AAVE/CRV/LDO
+# (correlated to what's already here) didn't.
+#
 # OR FALLBACK FOR NEWLY-LISTED ASSETS: regime_ma is NaN (and NaN
 # comparisons are always False in pandas) for the first
 # regime_filter_period days of ANY asset's OWN history -- without a
@@ -97,9 +117,9 @@
 #
 # HONEST TRADEOFFS, not just headline numbers (8-asset watchlist, DOGE
 # removed, DOT/UNI/BCH/FIL rejected, 150-day regime filter + OR fallback):
-#   - 2019-2024: 10446.41% total / 117.48%/yr / -41.97% DD
-#   - 2020-2022 crisis: 1009.25% total / 153.96%/yr / -41.97% DD
-#   - 2023-2026 crisis: 153.21% total / 29.44%/yr / -38.82% DD
+#   - 2019-2024: 13380.59% total / 126.57%/yr / -46.46% DD
+#   - 2020-2022 crisis: 1062.56% total / 158.62%/yr / -45.35% DD
+#   - 2023-2026 crisis: 202.31% total / 35.97%/yr / -36.92% DD
 #   - Even with the regime filter, return is still concentrated in a
 #     handful of outlier trades (a huge SOL 2023-2024 run, an early BTC
 #     2020-2021 trade) -- treat the headline annualized numbers as "what
@@ -146,6 +166,7 @@ watchlist:
   - ADA-USD
   - AVAX-USD
   - LINK-USD
+  - RENDER-USD
 
 entry:
   ma_period: 20
