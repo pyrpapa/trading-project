@@ -55,6 +55,8 @@ class AlpacaBroker:
         except ImportError:
             raise RuntimeError("Run: pip install alpaca-py")
 
+        self.api_key = api_key
+        self.secret_key = secret_key
         self.paper = paper
         self.client = TradingClient(api_key, secret_key, paper=paper)
 
@@ -117,6 +119,38 @@ class AlpacaBroker:
 
         order = self.client.submit_order(MarketOrderRequest(**kwargs))
         return {"id": str(order.id), "symbol": _from_alpaca_symbol(order.symbol), "side": side, "status": str(order.status)}
+
+    def get_latest_price(self, symbol: str) -> float:
+        """
+        Live quote for `symbol` (canonical, yfinance-style) straight from
+        Alpaca's own market data -- NOT data/fetcher.py's yfinance daily
+        bars. Used for position sizing and stop-loss/exit checks, where
+        yfinance's daily-bar data can lag "now" by more than the intended
+        one day (crypto especially -- confirmed directly: a live BUY
+        priced off a bar that was already 2 days stale despite running
+        same-day). The trend SIGNAL itself (MA/volume/regime crossovers
+        in strategy/rules.py) still comes from yfinance daily bars --
+        trend-following is meant to key off completed daily bars, only
+        the "what price is this actually happening at" check needed to
+        be live.
+        """
+        from alpaca.data.requests import CryptoLatestTradeRequest, StockLatestTradeRequest
+
+        alpaca_symbol = _to_alpaca_symbol(symbol)
+        if _is_crypto(symbol):
+            from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+            client = CryptoHistoricalDataClient(self.api_key, self.secret_key)
+            req = CryptoLatestTradeRequest(symbol_or_symbols=alpaca_symbol)
+            trade = client.get_crypto_latest_trade(req)[alpaca_symbol]
+        else:
+            from alpaca.data.historical.stock import StockHistoricalDataClient
+            from alpaca.data.enums import DataFeed
+            client = StockHistoricalDataClient(self.api_key, self.secret_key)
+            # IEX feed -- SIP requires a paid subscription; IEX is free
+            # and what a paper-trading account has access to by default.
+            req = StockLatestTradeRequest(symbol_or_symbols=alpaca_symbol, feed=DataFeed.IEX)
+            trade = client.get_stock_latest_trade(req)[alpaca_symbol]
+        return float(trade.price)
 
     def close_position(self, symbol: str):
         """`symbol` is canonical (yfinance-style) -- translated internally."""

@@ -207,6 +207,22 @@ def main():
                 price_history[ticker] = None
         return price_history[ticker]
 
+    # The BUY/SELL/pyramid SIGNAL still comes from yfinance's daily bars
+    # (get_price_history above) -- that's intentional, trend-following is
+    # meant to key off completed daily bars. But the price used for
+    # sizing and stop-loss checks needs to be as current as possible:
+    # yfinance's daily close can be stale by more than the intended one
+    # day (confirmed directly on a live crypto entry). Alpaca's own
+    # live quote closes that gap; falls back to the daily close (old
+    # behavior) if the live quote fetch fails for any reason, so a
+    # market-data hiccup degrades gracefully instead of blocking the run.
+    def get_live_price(ticker, fallback_price):
+        try:
+            return broker.get_latest_price(ticker)
+        except Exception as e:
+            print(f"  Note: live quote for {ticker} unavailable ({e}) — using last daily close (${fallback_price:.2f}) instead.")
+            return fallback_price
+
     # exited_tickers tracks which of today's open positions just got closed
     # in this same cycle, so the correlation breaker check (further down)
     # only counts positions that are STILL open by the time entries are
@@ -227,7 +243,7 @@ def main():
             continue
 
         sig_df = rules.generate_signals(df, cfg)
-        current_price = df["Close"].iloc[-1]
+        current_price = get_live_price(ticker, df["Close"].iloc[-1])
         entry_price = pos["avg_entry_price"]
         change_pct = (current_price - entry_price) / entry_price * 100
 
@@ -297,7 +313,7 @@ def main():
             atr = sig_df["atr"].iloc[-1] if "atr" in sig_df.columns else None
             if atr is None or pd.isna(atr) or atr <= 0:
                 continue
-            current_price = df["Close"].iloc[-1]
+            current_price = get_live_price(ticker, df["Close"].iloc[-1])
 
             open_units = store.find_open_trades(ticker, source="paper")
             if not open_units:
@@ -411,7 +427,7 @@ def main():
                     print(f"  {journal.format_blocked(ticker, reason)}")
                     continue
 
-        current_price = df["Close"].iloc[-1]
+        current_price = get_live_price(ticker, df["Close"].iloc[-1])
 
         max_position_value = portfolio_value * max_position_pct
         room_left = (portfolio_value * max_invested_pct) - invested_value
