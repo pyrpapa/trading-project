@@ -32,9 +32,34 @@ def _to_alpaca_symbol(ticker: str) -> str:
     return ticker.replace("-", "/") if _is_crypto(ticker) else ticker
 
 
-def _from_alpaca_symbol(symbol: str) -> str:
-    """Inverse of _to_alpaca_symbol, for translating broker responses back."""
-    return symbol.replace("/", "-") if "/" in symbol else symbol
+def _from_alpaca_symbol(symbol: str, asset_class=None) -> str:
+    """
+    Inverse of _to_alpaca_symbol, for translating broker responses back to
+    canonical (yfinance-style) format. Alpaca is NOT consistent about the
+    separator for crypto: order/asset responses use 'LINK/USD' (slash),
+    but the positions endpoint has been observed returning the same pair
+    as 'LINKUSD' -- no separator at all. Confirmed directly: a live
+    LINK-USD position came back from get_all_positions() as 'LINKUSD',
+    didn't match anything in _from_alpaca_symbol's old slash-only check,
+    and was silently flagged as an "orphaned" position -- disabling its
+    stop-loss/exit checks entirely, exactly the failure mode the orphan
+    warning exists to catch, except the position wasn't actually
+    orphaned, the symbol translation was just wrong.
+
+    `asset_class` (present on both Position and Order objects) is the
+    authoritative crypto/equity signal here, not the symbol's shape --
+    used to decide whether a missing separator needs to be reinserted at
+    all, so an equity ticker that happens to end in "USD" is never
+    mistaken for crypto.
+    """
+    if "/" in symbol:
+        return symbol.replace("/", "-")
+
+    from alpaca.trading.enums import AssetClass
+    is_crypto = asset_class == AssetClass.CRYPTO
+    if is_crypto and "-" not in symbol and symbol.endswith("USD"):
+        return f"{symbol[:-3]}-USD"
+    return symbol
 
 
 class AlpacaBroker:
@@ -84,7 +109,7 @@ class AlpacaBroker:
         """Returns {ticker: {qty, avg_entry_price, market_value, unrealized_plpc}}, ticker in canonical (yfinance-style) format."""
         positions = self.client.get_all_positions()
         return {
-            _from_alpaca_symbol(p.symbol): {
+            _from_alpaca_symbol(p.symbol, p.asset_class): {
                 "qty": float(p.qty),
                 "avg_entry_price": float(p.avg_entry_price),
                 "market_value": float(p.market_value),
@@ -118,7 +143,7 @@ class AlpacaBroker:
             raise ValueError("Must provide either notional_usd or qty")
 
         order = self.client.submit_order(MarketOrderRequest(**kwargs))
-        return {"id": str(order.id), "symbol": _from_alpaca_symbol(order.symbol), "side": side, "status": str(order.status)}
+        return {"id": str(order.id), "symbol": _from_alpaca_symbol(order.symbol, order.asset_class), "side": side, "status": str(order.status)}
 
     def get_latest_price(self, symbol: str) -> float:
         """
