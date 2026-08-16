@@ -70,6 +70,22 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     pyramid_unit_interval_n = pyramid_cfg.get("unit_interval_n", 0.5)
     pyramid_max_units = pyramid_cfg.get("max_units", 4)
 
+    # Peak-based trailing stop -- pulls a stack's stop up toward its
+    # highest CLOSE seen since entry (not just the entry price), so a
+    # sharp spike that reverses fast still gets SOME of its gain
+    # protected even if it never triggers a pyramid add (pyramiding only
+    # trails the stop up to each new unit's OWN stop level, in discrete
+    # 0.5N-interval jumps -- a fast spike-and-reverse within one of those
+    # jumps gets no protection at all from pyramiding alone). Runs
+    # independently of pyramiding and uses the CURRENT day's N, same
+    # "recompute at current volatility" convention the pyramid-add block
+    # already uses. Only moves the stop UP, never down (see the trailing
+    # update block below). Disabled unless a config explicitly opts in
+    # via risk.trailing_stop.enabled.
+    trailing_stop_cfg = cfg["risk"].get("trailing_stop") or {}
+    trailing_stop_enabled = trailing_stop_cfg.get("enabled", False) and sizing_method == "atr_unit"
+    trailing_stop_atr_multiple = trailing_stop_cfg.get("atr_multiple", cfg["risk"].get("stop_atr_multiple", 2.0))
+
     # Correlation-based circuit breaker (see strategy/correlation.py) — a
     # portfolio-level check on top of per-position sizing. Disabled unless
     # a config explicitly opts in via risk.correlation_breaker.enabled.
@@ -123,6 +139,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     rebalance_log = []    # portfolio selection's rebalance history
     last_stop_date = {}   # ticker -> date of its most recent stop_loss exit (cooldown)
     pyramid_log = []      # pyramid-add events (see the pyramid-add block below)
+    peak_price = {}       # ticker -> highest Close seen since the stack's entry (trailing stop)
     active_tickers = set(price_data.keys()) if not ps_enabled else set()
     next_rebalance_date = all_dates[0] if (ps_enabled and all_dates) else None
     equity_curve = []
@@ -226,6 +243,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
                         "units_in_stack": len(stack),
                     })
                 del open_positions[ticker]
+                peak_price.pop(ticker, None)
                 if exit_reason == "stop_loss" and cooldown_enabled:
                     last_stop_date[ticker] = date
 
@@ -332,6 +350,38 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
             )
             portfolio_value = cash + invested_value
 
+        # --- Update peak-based trailing stop (existing open stacks only) ---
+        # Deliberately runs AFTER today's stop-loss/trend-exit check above
+        # (which used yesterday's stop level) and updates the stop for
+        # TOMORROW's check instead -- avoids a same-day lookahead paradox
+        # where today's fresh high could retroactively stop itself out.
+        # Reads stack[0].stop_price as its starting point, so it picks up
+        # any pyramid-triggered trail from earlier in this same day's
+        # loop, and only ever raises it further (never down), same
+        # "shared across the stack" convention stop_price already uses.
+        if trailing_stop_enabled:
+            for ticker, stack in open_positions.items():
+                df = price_data[ticker]
+                if date not in df.index:
+                    continue
+                sig_df = signals.get(ticker)
+                if sig_df is None or date not in sig_df.index:
+                    continue
+                atr = sig_df.loc[date, "atr"]
+                if atr is None or pd.isna(atr) or atr <= 0:
+                    continue
+                price = df.loc[date, "Close"]
+                if pd.isna(price):
+                    continue
+
+                peak = max(peak_price.get(ticker, stack[0].entry_price), price)
+                peak_price[ticker] = peak
+                candidate_stop = peak - trailing_stop_atr_multiple * atr
+                current_stop = stack[0].stop_price
+                new_stop = max(current_stop, candidate_stop) if current_stop is not None else candidate_stop
+                for p in stack:
+                    p.stop_price = new_stop
+
         # --- Check entries ---
         for ticker, sig_df in signals.items():
             if ticker in open_positions:
@@ -423,6 +473,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
                 ticker, date, price, shares, entry_reason, entry_log,
                 stop_price, initial_risk_dollars, sizing_method, unit_number=1,
             )]
+            peak_price[ticker] = price
             invested_value += shares * price
 
         portfolio_value = cash + invested_value
@@ -472,6 +523,29 @@ def compute_metrics(
     years = days / 365.25 if days > 0 else 1
     annualized_return_pct = ((final_value / starting_cash) ** (1 / years) - 1) * 100 if years > 0 else 0
 
+    # Sortino ratio: annualized return / annualized downside deviation of
+    # period returns, MAR (minimum acceptable return) = 0. Unlike SQN
+    # (trade R-multiples), this only penalizes downside dispersion, not
+    # upside volatility -- and unlike a homemade downside-SQN variant, it
+    # has a widely-used external interpretation scale (<0 bad, 0-1
+    # sub-par, 1-2 good, 2-3 very good, >3 excellent), so a given number
+    # means something without having to rebuild the whole distribution.
+    # periods_per_year is derived from the equity curve's own bar count
+    # and calendar span (not a hardcoded 252/365), so it self-adjusts to
+    # whatever bar frequency this backtest actually used.
+    period_returns = equity_df["portfolio_value"].pct_change().dropna()
+    if len(period_returns) > 1 and years > 0:
+        periods_per_year = len(period_returns) / years
+        downside_returns = period_returns.clip(upper=0)
+        downside_deviation = float(np.sqrt((downside_returns ** 2).mean()))
+        annualized_downside_deviation = downside_deviation * np.sqrt(periods_per_year)
+        sortino_ratio = (
+            (annualized_return_pct / 100) / annualized_downside_deviation
+            if annualized_downside_deviation > 0 else None
+        )
+    else:
+        sortino_ratio = None
+
     # R-multiple stats — every trade's P&L expressed as a multiple of its
     # own initial risk (the Turtles' own yardstick: "+2.3R", "-1.0R").
     # Works whether trades used flat-% stops or N-based stops, since both
@@ -493,6 +567,7 @@ def compute_metrics(
         "total_return_pct": round(total_return_pct, 2),
         "annualized_return_pct": round(annualized_return_pct, 2),
         "max_drawdown_pct": round(max_drawdown_pct, 2),
+        "sortino_ratio": round(sortino_ratio, 3) if sortino_ratio is not None else None,
         "n_trades": n_trades,
         "win_rate_pct": round(win_rate, 2),
         "avg_win_pct": round(np.mean([t["return_pct"] for t in wins]), 2) if wins else 0,

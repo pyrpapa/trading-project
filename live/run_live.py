@@ -34,7 +34,7 @@ from strategy import rules, journal, correlation, portfolio_selection
 from broker.alpaca_client import AlpacaBroker
 
 
-def _stack_stop_price(open_units, avg_entry_price, sizing_method, cfg):
+def _stack_stop_price(open_units, avg_entry_price, sizing_method, cfg, df=None, atr=None):
     """
     Reconstructs the stop price for an already-open position (possibly a
     PYRAMIDED STACK of several units, each bought at a different price
@@ -54,6 +54,20 @@ def _stack_stop_price(open_units, avg_entry_price, sizing_method, cfg):
     -- i.e. the MAX across every open unit's own (entry_price -
     risk_per_share). For a single non-pyramided unit this reduces to
     exactly the old single-unit calculation.
+
+    If risk.trailing_stop.enabled, ALSO reconstructs the peak-based
+    trailing stop and takes the max against the above -- mirrors
+    backtest/engine.py's peak_price tracking, just recomputed fresh
+    each run from the already-fetched price history `df` instead of
+    kept as persistent in-memory state, same "no fragile persistent
+    state, reconstruct from source of truth every run" pattern every
+    other live-mode check in this file already uses. Peak is measured
+    from the STACK's original (earliest-unit) entry date, matching
+    engine.py's peak_price never resetting on a pyramid add. Requires
+    `df` (the ticker's own price history, already fetched by the
+    caller) and `atr` (today's N, already computed by the caller) --
+    silently skipped if either is missing, same fail-open pattern as
+    every other Supabase-backed check here.
     """
     if sizing_method == "atr_unit":
         if not open_units:
@@ -63,7 +77,17 @@ def _stack_stop_price(open_units, avg_entry_price, sizing_method, cfg):
             for u in open_units
             if u.get("initial_risk_dollars") and u.get("shares")
         ]
-        return max(stops) if stops else None
+        stop_price = max(stops) if stops else None
+
+        trailing_cfg = cfg["risk"].get("trailing_stop") or {}
+        if trailing_cfg.get("enabled") and df is not None and atr is not None and pd.notna(atr) and atr > 0:
+            trailing_atr_multiple = trailing_cfg.get("atr_multiple", cfg["risk"].get("stop_atr_multiple", 2.0))
+            earliest_entry = min(pd.Timestamp(u["entry_date"]) for u in open_units)
+            since_entry = df.loc[df.index >= earliest_entry, "Close"]
+            if not since_entry.empty:
+                trailing_stop = since_entry.max() - trailing_atr_multiple * atr
+                stop_price = max(stop_price, trailing_stop) if stop_price is not None else trailing_stop
+        return stop_price
 
     stop_loss_pct = cfg["exit"].get("stop_loss_pct")
     return avg_entry_price * (1 - stop_loss_pct / 100) if stop_loss_pct else None
@@ -248,7 +272,8 @@ def main():
         change_pct = (current_price - entry_price) / entry_price * 100
 
         open_units = store.find_open_trades(ticker, source="paper") if store else []
-        stop_price = _stack_stop_price(open_units, entry_price, sizing_method, cfg)
+        atr = sig_df["atr"].iloc[-1] if "atr" in sig_df.columns else None
+        stop_price = _stack_stop_price(open_units, entry_price, sizing_method, cfg, df=df, atr=atr)
         if sizing_method == "atr_unit" and stop_price is None:
             print(f"  Note: {ticker} used N-based sizing but its stop couldn't be "
                   f"reconstructed (no Supabase trade record(s) found) — stop-loss check skipped this run.")

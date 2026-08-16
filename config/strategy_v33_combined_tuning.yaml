@@ -1,0 +1,67 @@
+# v33 -- combined candidate from the first full parameter_sweep.py run
+# (results/parameter-sweep/), testing 3 one-at-a-time winners TOGETHER:
+#
+#   max_invested_pct: 80 -> 100   clean win, ALL 3 windows, no exceptions
+#   max_position_pct:  35 -> 20   won both crisis windows big (incl. the
+#                                 most-relevant 2023-2026 one); costs the
+#                                 2019-2024 window, which the base config's
+#                                 own header already treats as less trust-
+#                                 worthy (concentrated in a few outlier
+#                                 trades) than the crisis windows
+#   ma_period:         20 -> 10   won 2019-2024 and 2023-2026; modest cost
+#                                 in 2020-2022
+#
+# Deliberately NOT included, despite showing up in the same sweep, because
+# each is a real tradeoff (not a clean multi-window win) and deserves its
+# own isolated test rather than being bundled in unattributably:
+#   - stop_atr_multiple: 2.5 (hurts the 2023-2026 window)
+#   - atr_period: 30/40 (better drawdown, costs return in 2023-2026)
+#   - pyramiding.enabled: false (biggest single swing in the whole sweep --
+#     helps 2023-2026 a lot, tanks the other two -- too consequential to
+#     bury inside a combined change)
+#
+# This is the 2019-2024 window. See _crisis_2022 and _crisis_2026 sibling
+# files for the other two standard windows, same convention as v27-v31.
+#
+# Compare against the live config:
+#   python run_backtest.py --config config/strategy_v33_combined_tuning.yaml --chart --save --label "v33-combined"
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LINK-USD
+  - RENDER-USD
+
+entry:
+  ma_period: 10               # was 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0      # was 35.0
+  max_invested_pct: 100.0     # was 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

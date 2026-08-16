@@ -1,0 +1,69 @@
+# v36 -- v34 (ma_period:10, max_position_pct:20, max_invested_pct:90)
+# combined with v35's peak-based trailing stop (atr_multiple:2.0), now
+# that each has been validated in isolation first:
+#   v33: max_invested_pct 80->100 + max_position_pct 35->20 + ma_period 20->10
+#   v34: same but max_invested_pct dialed back to 90 -- beat v33 on
+#        EVERY metric in all 3 windows, and beat the live baseline on
+#        return AND Sortino everywhere, at the cost of deeper drawdown
+#        in the 2 older windows (flat-to-better in the most relevant
+#        2023-2026 window)
+#   v35: trailing_stop.enabled on the live baseline ALONE -- fixed the
+#        "fast spike-and-reverse round-trips before either exit
+#        mechanism catches it" gap, improving drawdown/SQN/Sortino/win
+#        rate in every window, near-free in 2 of 3, ~9% return cost in
+#        the 2023-2026 window
+#
+# Hypothesis being tested here: v34's extra drawdown came from having
+# MORE capital deployed with a static stop; the trailing stop should
+# cut that back down since it exits losing/reversing trades faster and
+# with less give-back, independent of how much capital is on the table.
+#
+# This is the 2019-2024 window. See _crisis_2022 and _crisis_2026
+# sibling files for the other two standard windows.
+#
+# Compare against v34, v35, and the live config:
+#   python run_backtest.py --config config/strategy_v36_v34_plus_trailing_stop.yaml --chart --save --label "v36-combined"
+#   python run_backtest.py --config config/strategy_v34_combined_tuning_90pct.yaml --chart --save --label "v34-compare"
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LINK-USD
+  - RENDER-USD
+
+entry:
+  ma_period: 10               # v34
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0      # v34
+  max_invested_pct: 90.0      # v34
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+  trailing_stop:              # v35
+    enabled: true
+    atr_multiple: 2.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
