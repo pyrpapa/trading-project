@@ -6,7 +6,7 @@ A speculative, personal passion project — a systematic trading strategy I buil
 
 **Start here**: [`MASTER_STRATEGY_GUIDE.md`](MASTER_STRATEGY_GUIDE.md) is the real documentation — plain-English, no background assumed, covers exactly how the strategy decides to buy/sell/size positions, every metric in a backtest report, and the honest open risks. This README is just setup instructions.
 
-**An example report** (built from synthetic/fake data, not real results — just to show what the tool produces): [`examples/example_backtest_report.html`](examples/example_backtest_report.html).
+**An example report** (built from synthetic/fake data, not real results — just to show what the tool produces): [view it live](https://pyrpapa.github.io/trading-project/examples/example_backtest_report.html) (source: [`examples/example_backtest_report.html`](examples/example_backtest_report.html)).
 
 ## Project structure
 
