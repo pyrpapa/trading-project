@@ -42,11 +42,14 @@ class Position:
         return self.shares * price
 
 
-def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
+def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: pd.Series = None) -> dict:
     """
     price_data: {ticker: DataFrame with OHLCV}
     signals:    {ticker: DataFrame with 'signal' column, same index as price_data}
     cfg:        parsed strategy.yaml
+    benchmark_returns: optional daily % return Series (e.g. SPY) for
+        metrics["beta"]/["alpha_pct"] -- see compute_metrics. Pure
+        pass-through, engine.py itself never fetches data.
 
     Returns dict with 'trades' (list of closed trades) and 'metrics' (summary stats)
     and 'equity_curve' (DataFrame of portfolio value over time).
@@ -85,6 +88,30 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     trailing_stop_cfg = cfg["risk"].get("trailing_stop") or {}
     trailing_stop_enabled = trailing_stop_cfg.get("enabled", False) and sizing_method == "atr_unit"
     trailing_stop_atr_multiple = trailing_stop_cfg.get("atr_multiple", cfg["risk"].get("stop_atr_multiple", 2.0))
+
+    # Side pot -- periodically skims trading profit into a separate,
+    # untraded holding, actually removed from `cash` (so it stops being
+    # sized into future positions, same as moving it to a real separate
+    # account). Two phases:
+    #   PHASE 1 (side_pot_value < starting_cash): whenever portfolio_value
+    #     exceeds the running benchmark (starts at starting_cash -- the
+    #     "initial investment"), skim phase1_skim_pct of the NEW gain
+    #     above the benchmark, then reset the benchmark to the
+    #     (post-skim) portfolio_value so the same gain is never skimmed
+    #     twice. Goal: get the side pot up to matching the initial
+    #     investment -- the point past which you could lose the entire
+    #     TRADING account and still have your original stake back.
+    #   PHASE 2 (side_pot_value >= starting_cash): same mechanic, but the
+    #     trigger becomes a full phase2_ratchet_pct move above the last
+    #     benchmark (a real new plateau, not any new high) -- a classic
+    #     high-water-mark ratchet, same shape hedge funds use for
+    #     performance fees, just skimming into your own side pot instead.
+    # Disabled unless a config explicitly opts in via side_pot.enabled.
+    side_pot_cfg = cfg.get("side_pot") or {}
+    side_pot_enabled = side_pot_cfg.get("enabled", False)
+    side_pot_phase1_skim_pct = side_pot_cfg.get("phase1_skim_pct", 50.0) / 100
+    side_pot_phase2_ratchet_pct = side_pot_cfg.get("phase2_ratchet_pct", 20.0) / 100
+    side_pot_phase2_skim_pct = side_pot_cfg.get("phase2_skim_pct", 50.0) / 100
 
     # Correlation-based circuit breaker (see strategy/correlation.py) — a
     # portfolio-level check on top of per-position sizing. Disabled unless
@@ -140,9 +167,30 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
     last_stop_date = {}   # ticker -> date of its most recent stop_loss exit (cooldown)
     pyramid_log = []      # pyramid-add events (see the pyramid-add block below)
     peak_price = {}       # ticker -> highest Close seen since the stack's entry (trailing stop)
+    last_price = {}       # ticker -> most recent known Close (mark-to-market gap fallback, see mark_price)
+    side_pot_value = 0.0  # skimmed profit, actually removed from `cash` -- see side_pot block below
+    side_pot_benchmark = starting_cash  # last equity level a skim was measured from
+    side_pot_log = []     # skim events (date, amount, phase, portfolio_value after)
     active_tickers = set(price_data.keys()) if not ps_enabled else set()
     next_rebalance_date = all_dates[0] if (ps_enabled and all_dates) else None
     equity_curve = []
+
+    def mark_price(ticker, date):
+        """Price to mark an open position at for `date`. Falls back to the
+        most recent KNOWN Close when `ticker` has no row for `date` (a data
+        gap -- confirmed directly on FAS around 2026-07-21/22, missing 2
+        trading days other tickers had) instead of silently excluding the
+        position from invested_value, which used to value it at $0 for
+        those days and then "recover" the instant data resumed -- a fake
+        ~40% one-day portfolio drawdown with no real price move behind it.
+        Returns None only if `ticker` has never had a valid price yet
+        (shouldn't happen for a position that's already open)."""
+        if ticker in price_data and date in price_data[ticker].index:
+            price = price_data[ticker].loc[date, "Close"]
+            if pd.notna(price):
+                last_price[ticker] = price
+                return price
+        return last_price.get(ticker)
 
     for date in all_dates:
         # Portfolio selection rebalance check -- happens BEFORE the day's
@@ -169,10 +217,10 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
 
         # Mark-to-market portfolio value at start of day
         invested_value = sum(
-            pos.value(price_data[t].loc[date, "Close"])
+            pos.value(mark_price(t, date))
             for t, stack in open_positions.items()
+            if mark_price(t, date) is not None
             for pos in stack
-            if date in price_data[t].index
         )
         portfolio_value = cash + invested_value
 
@@ -249,10 +297,10 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
 
         # Recompute invested value after exits
         invested_value = sum(
-            pos.value(price_data[t].loc[date, "Close"])
+            pos.value(mark_price(t, date))
             for t, stack in open_positions.items()
+            if mark_price(t, date) is not None
             for pos in stack
-            if date in price_data[t].index
         )
         portfolio_value = cash + invested_value
 
@@ -289,10 +337,10 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
                     continue
 
                 invested_value = sum(
-                    pos.value(price_data[t].loc[date, "Close"])
+                    pos.value(mark_price(t, date))
                     for t, s in open_positions.items()
+                    if mark_price(t, date) is not None
                     for pos in s
-                    if date in price_data[t].index
                 )
                 portfolio_value = cash + invested_value
                 max_position_value = portfolio_value * max_position_pct
@@ -343,10 +391,10 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
 
             # Recompute invested value after pyramid adds
             invested_value = sum(
-                pos.value(price_data[t].loc[date, "Close"])
+                pos.value(mark_price(t, date))
                 for t, stack in open_positions.items()
+                if mark_price(t, date) is not None
                 for pos in stack
-                if date in price_data[t].index
             )
             portfolio_value = cash + invested_value
 
@@ -477,20 +525,72 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict) -> dict:
             invested_value += shares * price
 
         portfolio_value = cash + invested_value
-        equity_curve.append({"date": date, "portfolio_value": portfolio_value, "cash": cash})
+
+        # --- Side pot skim check (see side_pot block above) --- runs once
+        # per day, using the day's final trading equity (after all of
+        # today's exits/pyramid-adds/entries), so a skim is never based
+        # on a stale intraday snapshot.
+        if side_pot_enabled:
+            if side_pot_value < starting_cash:
+                # Phase 1: any new gain above the benchmark triggers a skim.
+                if portfolio_value > side_pot_benchmark:
+                    gain = portfolio_value - side_pot_benchmark
+                    skim = min(gain * side_pot_phase1_skim_pct, cash)
+                    if skim > 0:
+                        cash -= skim
+                        side_pot_value += skim
+                        portfolio_value = cash + invested_value
+                        side_pot_benchmark = portfolio_value
+                        side_pot_log.append({
+                            "date": date, "phase": 1, "skim_amount": round(skim, 2),
+                            "side_pot_value": round(side_pot_value, 2),
+                            "portfolio_value": round(portfolio_value, 2),
+                        })
+            else:
+                # Phase 2: only a full ratchet-pct move above the last
+                # benchmark triggers a skim -- a real new plateau, not
+                # any new high.
+                ratchet_trigger = side_pot_benchmark * (1 + side_pot_phase2_ratchet_pct)
+                if portfolio_value >= ratchet_trigger:
+                    gain = portfolio_value - side_pot_benchmark
+                    skim = min(gain * side_pot_phase2_skim_pct, cash)
+                    if skim > 0:
+                        cash -= skim
+                        side_pot_value += skim
+                        portfolio_value = cash + invested_value
+                        side_pot_benchmark = portfolio_value
+                        side_pot_log.append({
+                            "date": date, "phase": 2, "skim_amount": round(skim, 2),
+                            "side_pot_value": round(side_pot_value, 2),
+                            "portfolio_value": round(portfolio_value, 2),
+                        })
+
+        equity_curve.append({
+            "date": date, "portfolio_value": portfolio_value, "cash": cash,
+            "side_pot_value": side_pot_value, "total_wealth": portfolio_value + side_pot_value,
+        })
 
     equity_df = pd.DataFrame(equity_curve).set_index("date")
-    metrics = compute_metrics(equity_df, closed_trades, starting_cash, blocked_signals, rebalance_log, pyramid_log)
+    metrics = compute_metrics(
+        equity_df, closed_trades, starting_cash, blocked_signals, rebalance_log, pyramid_log,
+        benchmark_returns=benchmark_returns,
+    )
+    if side_pot_enabled:
+        metrics["side_pot_final_value"] = round(side_pot_value, 2)
+        metrics["side_pot_skim_count"] = len(side_pot_log)
+        metrics["side_pot_reached_parity"] = side_pot_value >= starting_cash
 
     return {
         "trades": closed_trades, "metrics": metrics, "equity_curve": equity_df,
         "blocked_signals": blocked_signals, "rebalance_log": rebalance_log, "pyramid_log": pyramid_log,
+        "side_pot_log": side_pot_log,
     }
 
 
 def compute_metrics(
     equity_df: pd.DataFrame, trades: list, starting_cash: float,
     blocked_signals: list = None, rebalance_log: list = None, pyramid_log: list = None,
+    benchmark_returns: pd.Series = None,
 ) -> dict:
     if equity_df.empty:
         return {}
@@ -502,6 +602,14 @@ def compute_metrics(
     running_max = equity_df["portfolio_value"].cummax()
     drawdown = (equity_df["portfolio_value"] - running_max) / running_max
     max_drawdown_pct = drawdown.min() * 100
+
+    # Ulcer Index: sqrt(mean(drawdown^2)) -- unlike max_drawdown_pct (which
+    # only cares about the single worst instant), this penalizes BOTH depth
+    # and DURATION of every drawdown along the way. A strategy that grinds
+    # sideways-down for months scores worse here than one with the same
+    # max drawdown that recovers quickly, even though max_drawdown_pct
+    # alone can't tell them apart.
+    ulcer_index = float(np.sqrt((drawdown ** 2).mean())) * 100
 
     # Trade stats
     n_trades = len(trades)
@@ -522,6 +630,11 @@ def compute_metrics(
     days = (equity_df.index[-1] - equity_df.index[0]).days
     years = days / 365.25 if days > 0 else 1
     annualized_return_pct = ((final_value / starting_cash) ** (1 / years) - 1) * 100 if years > 0 else 0
+
+    # Calmar Ratio: annualized return / |max drawdown|. Answers "how much
+    # return per unit of worst-case pain" -- directly comparable across
+    # strategies (or against simple buy-and-hold) regardless of scale.
+    calmar_ratio = (annualized_return_pct / abs(max_drawdown_pct)) if max_drawdown_pct != 0 else None
 
     # Sortino ratio: annualized return / annualized downside deviation of
     # period returns, MAR (minimum acceptable return) = 0. Unlike SQN
@@ -561,12 +674,47 @@ def compute_metrics(
     else:
         avg_r = r_stdev = sqn = None
 
+    # Profit Factor: gross profit / gross loss (both as positive dollar
+    # sums). A different question than win rate or avg R-multiple --
+    # "for every dollar lost, how many dollars were won." >1 is
+    # profitable, >2 is generally considered strong. None (not infinity)
+    # when there are no losing trades to divide by, or no trades at all.
+    gross_profit = sum(t["pnl"] for t in wins)
+    gross_loss = abs(sum(t["pnl"] for t in losses if t["pnl"] < 0))
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
+
+    # Beta / Alpha vs an external benchmark (see run_backtest.py, which
+    # fetches SPY's daily returns and passes them in as
+    # benchmark_returns). Beta: how much this equity curve's daily moves
+    # track the benchmark's (regression slope). Alpha: the annualized
+    # excess return LEFT OVER after removing that benchmark exposure --
+    # simplified CAPM, risk-free rate treated as 0 (same MAR=0 convention
+    # Sortino already uses here). Directly answers "is this adding real
+    # value beyond just being correlated with a rising market," not just
+    # "did it beat the benchmark's raw number." None when no benchmark
+    # was supplied, or too little overlapping data to regress on.
+    beta = alpha_pct = None
+    if benchmark_returns is not None:
+        strat_returns = equity_df["portfolio_value"].pct_change().dropna()
+        aligned = pd.DataFrame({"strategy": strat_returns, "benchmark": benchmark_returns}).dropna()
+        if len(aligned) > 1:
+            bench_var = aligned["benchmark"].var()
+            if bench_var > 0:
+                beta = float(aligned["strategy"].cov(aligned["benchmark"]) / bench_var)
+                bench_days = (aligned.index[-1] - aligned.index[0]).days
+                bench_years = bench_days / 365.25 if bench_days > 0 else 1
+                bench_total_return = (1 + aligned["benchmark"]).prod() - 1
+                bench_annualized = (1 + bench_total_return) ** (1 / bench_years) - 1 if bench_years > 0 else 0
+                alpha_pct = (annualized_return_pct / 100 - beta * bench_annualized) * 100
+
     return {
         "starting_cash": starting_cash,
         "final_value": round(final_value, 2),
         "total_return_pct": round(total_return_pct, 2),
         "annualized_return_pct": round(annualized_return_pct, 2),
         "max_drawdown_pct": round(max_drawdown_pct, 2),
+        "ulcer_index": round(ulcer_index, 3),
+        "calmar_ratio": round(calmar_ratio, 3) if calmar_ratio is not None else None,
         "sortino_ratio": round(sortino_ratio, 3) if sortino_ratio is not None else None,
         "n_trades": n_trades,
         "win_rate_pct": round(win_rate, 2),
@@ -577,6 +725,9 @@ def compute_metrics(
         "avg_r_multiple": round(avg_r, 3) if avg_r is not None else None,
         "r_multiple_stdev": round(r_stdev, 3) if r_stdev is not None else None,
         "system_quality_number": round(sqn, 3) if sqn is not None else None,
+        "profit_factor": round(profit_factor, 3) if profit_factor is not None else None,
+        "beta": round(beta, 3) if beta is not None else None,
+        "alpha_pct": round(alpha_pct, 3) if alpha_pct is not None else None,
         "best_r_multiple": round(max(r_multiples), 3) if r_multiples else None,
         "worst_r_multiple": round(min(r_multiples), 3) if r_multiples else None,
         "correlation_blocked_count": len(blocked_signals) if blocked_signals else 0,

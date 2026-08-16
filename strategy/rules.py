@@ -4,6 +4,7 @@ Converts the config-defined rule into buy/sell signals on a price DataFrame.
 Nothing in here is hardcoded strategy logic — every threshold comes from
 config/strategy.yaml. To change the strategy, edit the YAML, not this file.
 """
+import numpy as np
 import pandas as pd
 
 
@@ -60,6 +61,39 @@ def add_indicators(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     ], axis=1).max(axis=1)
     df["atr"] = true_range.rolling(atr_period).mean()
 
+    # Choppiness Index (optional, opt-in via entry.choppiness_filter_period)
+    # -- Dreiss's own formula: 100 * log10(sum of True Range over n days /
+    # (n-day High - n-day Low)) / log10(n). Measures how EFFICIENTLY price
+    # covered ground, not which direction -- if price traveled a lot of
+    # total distance (big True Range sum) but the NET high-to-low range is
+    # small, that's a choppy/ranging market (CI near 100); if the True
+    # Range sum is close to the net range, price moved efficiently in one
+    # direction (CI near 0, a real trend). Deliberately a DIFFERENT
+    # question than the regime filter above -- regime_filter_period asks
+    # "which direction is the slow trend," this asks "is there actually a
+    # trend to follow right now, regardless of direction." Built in direct
+    # response to the last-12-months diagnosis: the regime filter was
+    # already blocking entries 79.6% of the time that year (vs 42.9%
+    # historically) -- it correctly avoided most of the downtrend, but of
+    # the ~20% of days it DID allow an entry, 32 of 33 trades still ended
+    # in a stop-loss with short hold times, the signature of choppiness
+    # WITHIN a nominally-eligible stretch, not a direction problem the
+    # regime filter could ever catch. Computed unconditionally (cheap,
+    # reuses true_range from the ATR calc above) so switching this on is a
+    # pure config change, same "always available" pattern as everything
+    # else in this function.
+    choppiness_period = entry_cfg.get("choppiness_filter_period", 14)
+    high_n = df["High"].rolling(choppiness_period).max()
+    low_n = df["Low"].rolling(choppiness_period).min()
+    price_range = high_n - low_n
+    atr_sum = true_range.rolling(choppiness_period).sum()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        df["choppiness_index"] = np.where(
+            price_range > 0,
+            100 * np.log10(atr_sum / price_range) / np.log10(choppiness_period),
+            np.nan,
+        )
+
     return df
 
 
@@ -89,6 +123,13 @@ def entry_reason_text(cfg: dict) -> str:
     regime_filter_period = entry_cfg.get("regime_filter_period")
     if regime_filter_period:
         reason += f", with price above its {regime_filter_period}-day regime-filter average"
+    choppiness_threshold = entry_cfg.get("choppiness_threshold")
+    if choppiness_threshold:
+        choppiness_period = entry_cfg.get("choppiness_filter_period", 14)
+        reason += (
+            f", with its {choppiness_period}-day choppiness index at or below "
+            f"{choppiness_threshold} (market judged to be trending, not choppy)"
+        )
     return reason
 
 
@@ -187,6 +228,20 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         regime_confirmed = df["Close"] > df["regime_ma"]
         regime_unavailable = df["regime_ma"].isna()
         buy_signal = buy_signal & (regime_confirmed | regime_unavailable)
+
+    # Choppiness filter (optional, see add_indicators) -- don't take the
+    # entry signal unless the market is actually TRENDING right now
+    # (low choppiness_index), independent of and in addition to whatever
+    # the regime filter already decided about direction. Same composability
+    # and OR-fallback discipline as the regime filter: an established
+    # asset still has to clear the filter, an asset without
+    # choppiness_filter_period days of history yet falls back to letting
+    # the signal through rather than being permanently locked out.
+    choppiness_threshold = entry_cfg.get("choppiness_threshold")
+    if choppiness_threshold:
+        trending_enough = df["choppiness_index"] <= choppiness_threshold
+        choppiness_unavailable = df["choppiness_index"].isna()
+        buy_signal = buy_signal & (trending_enough | choppiness_unavailable)
 
     # Trend-exit signal. exit.type selects HOW it's detected; exit.ma_exit
     # still gates whether any trend-exit is active at all (independent of

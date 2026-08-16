@@ -71,6 +71,7 @@ def main():
         cfg["entry"]["ma_period"], cfg["entry"]["volume_ma_period"],
         cfg["entry"].get("breakout_period", 0),
         cfg["entry"].get("regime_filter_period", 0),
+        cfg["entry"].get("choppiness_filter_period", 14),
         cfg.get("exit", {}).get("exit_breakout_period", 0),
         cfg.get("risk", {}).get("atr_period", 20),
         cfg["portfolio_selection"].get("lookback_period", 0) if ps_enabled else 0,
@@ -99,8 +100,23 @@ def main():
 
     signals = {t: rules.generate_signals(df, cfg) for t, df in price_data.items()}
 
+    # SPY as the default benchmark for metrics["beta"]/["alpha_pct"] --
+    # answers "is this adding real value beyond just being correlated with
+    # a rising market," not just "did it beat SPY's raw number." Skipped
+    # for synthetic data (no real benchmark to compare against) and fails
+    # open on any fetch error (a benchmark hiccup shouldn't block the
+    # backtest itself) -- beta/alpha just come back None in that case,
+    # same as every other optional metric in compute_metrics.
+    benchmark_returns = None
+    if not use_synthetic:
+        try:
+            spy_df = fetcher.fetch("SPY", fetch_start, end)
+            benchmark_returns = spy_df.loc[start:end, "Close"].pct_change().dropna()
+        except Exception as e:
+            print(f"  Note: SPY benchmark fetch failed ({e}) — beta/alpha will be None this run.")
+
     print("Running backtest...")
-    result = engine.run_backtest(price_data, signals, cfg)
+    result = engine.run_backtest(price_data, signals, cfg, benchmark_returns=benchmark_returns)
 
     print("\n=== METRICS ===")
     for k, v in result["metrics"].items():

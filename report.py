@@ -195,14 +195,25 @@ def _stat_tiles_html(metrics: dict) -> str:
         v = metrics.get(key)
         return na if v is None else f"{v:,.{digits}f}{suffix}"
 
+    def fmt_usd(key, na="—"):
+        v = metrics.get(key)
+        return na if v is None else f"${v:,.2f}"
+
     tiles = [
+        ("Starting equity", fmt_usd("starting_cash")),
+        ("Ending equity", fmt_usd("final_value")),
         ("Total return", fmt("total_return_pct", "%")),
-        ("Annualized", fmt("annualized_return_pct", "%")),
+        ("CAGR", fmt("annualized_return_pct", "%")),
         ("Max drawdown", fmt("max_drawdown_pct", "%")),
+        ("Ulcer Index", fmt("ulcer_index", "", 3)),
         ("Win rate", fmt("win_rate_pct", "%")),
         ("Trades", fmt("n_trades", "", 0)),
         ("Avg R-multiple", fmt("avg_r_multiple", "R")),
+        ("Profit Factor", fmt("profit_factor", "", 3)),
         ("System Quality (SQN)", fmt("system_quality_number", "", 2)),
+        ("Sortino ratio", fmt("sortino_ratio", "", 3)),
+        ("Calmar ratio", fmt("calmar_ratio", "", 3)),
+        ("Beta / Alpha (vs SPY)", f"{fmt('beta', '', 3)} / {fmt('alpha_pct', '%')}"),
         ("Best / Worst R", f"{fmt('best_r_multiple', 'R')} / {fmt('worst_r_multiple', 'R')}"),
         ("Blocked by breaker", fmt("correlation_blocked_count", "", 0)),
         ("Rebalances", fmt("portfolio_rebalances", "", 0)),
@@ -356,6 +367,126 @@ def generate_html_report(result: dict, cfg: dict, price_data: dict, run_label: s
 </html>
 """
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return out_path
+
+
+def generate_blend_html_report(blend_result: dict, run_label: str, out_path: str) -> str:
+    """
+    Same report shell as generate_html_report, adapted for
+    blend_backtest.py's two-sleeve blend (ETF + crypto, fixed weight)
+    instead of a single config's run_backtest() result.
+
+    Shows THREE separate stat-tile sections, not one: the ETF sleeve's
+    OWN metrics (real trades, real win rate -- it runs its own full
+    backtest), the crypto sleeve's OWN metrics (same), and the COMBINED
+    blend's metrics last. The combined section's trade-level fields
+    (n_trades, win_rate_pct, profit_factor, SQN, best/worst R) are
+    genuinely always 0/None -- the blend combines the two sleeves'
+    DAILY RETURNS, not their trade histories, so there's no unified
+    trade log for it to report on. That's not a bug; it's inherent to
+    blending returns instead of merging trade lists (see
+    blend_backtest.py's docstring). The per-sleeve sections are where
+    the real trade-level numbers live.
+
+    No R-multiple histogram or per-ticker price/marker charts -- those
+    need a single sleeve's own trade journal + price data, and showing
+    them for one sleeve but not the other would be misleading about
+    which one they belong to. Equity curve + drawdown and monthly
+    returns are for the BLENDED curve, since that's the actual bottom
+    line an investor would experience.
+
+    blend_result: the dict returned by blend_backtest.run_blend()
+    """
+    metrics = blend_result["metrics"]
+    equity_df = blend_result["equity_curve"]
+    etf_m = blend_result["etf_result"]["metrics"]
+    crypto_m = blend_result["crypto_result"]["metrics"]
+    crypto_weight = blend_result["crypto_weight"]
+    etf_watchlist = blend_result["etf_cfg"]["watchlist"]
+
+    equity_img = _fig_to_data_uri(_equity_drawdown_chart(equity_df))
+    monthly_fig = _monthly_returns_chart(equity_df)
+    monthly_img = _fig_to_data_uri(monthly_fig) if monthly_fig else None
+
+    sections = [f'<img class="chart" src="{equity_img}" alt="Blended equity curve and drawdown">']
+    if monthly_img:
+        sections.append(f'<img class="chart" src="{monthly_img}" alt="Monthly returns">')
+
+    def section(title, subtitle, tile_html):
+        return (
+            f'<h2 style="font-size:15px; margin: 28px 0 4px;">{title}</h2>'
+            f'<div class="subtitle" style="margin-bottom:12px;">{subtitle}</div>'
+            f'{tile_html}'
+        )
+
+    start = equity_df.index[0].date()
+    end = equity_df.index[-1].date()
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Blend report — {run_label}</title>
+<style>
+  body {{
+    margin: 0; padding: 32px 40px 60px;
+    background: #f9f9f7; color: {INK_PRIMARY};
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }}
+  h1 {{ font-size: 20px; margin: 0 0 4px; }}
+  h2 {{ color: {INK_PRIMARY}; }}
+  .subtitle {{ color: {INK_SECONDARY}; font-size: 13px; margin-bottom: 24px; }}
+  .tiles {{
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    margin-bottom: 28px;
+  }}
+  .tile {{
+    background: {SURFACE}; border: 1px solid {GRIDLINE}; border-radius: 8px;
+    padding: 14px 16px;
+  }}
+  .tile-label {{ font-size: 12px; color: {INK_SECONDARY}; margin-bottom: 6px; }}
+  .tile-value {{ font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }}
+  .chart {{
+    width: 100%; display: block; margin-bottom: 24px;
+    background: {SURFACE}; border: 1px solid {GRIDLINE}; border-radius: 8px;
+    padding: 8px;
+  }}
+</style>
+</head>
+<body>
+  <h1>Blend report — {run_label}</h1>
+  <div class="subtitle">
+    {1 - crypto_weight:.0%} ETF ({', '.join(etf_watchlist)}) / {crypto_weight:.0%} crypto (fixed weight, not momentum-rotated)
+    &middot; {start} to {end}
+  </div>
+
+  {section(
+      f"ETF sleeve ({', '.join(etf_watchlist)}) — {1 - crypto_weight:.0%} weight",
+      "Runs its own full backtest with its own trades — these are real, sleeve-specific numbers.",
+      _stat_tiles_html(etf_m),
+  )}
+
+  {section(
+      f"Crypto sleeve (config/strategy_master.yaml) — {crypto_weight:.0%} weight",
+      "Same — its own independent backtest and trade history.",
+      _stat_tiles_html(crypto_m),
+  )}
+
+  {section(
+      "Combined (blended) portfolio",
+      "The two sleeves' DAILY RETURNS blended at the weights above, not a merged trade list — "
+      "there's no unified trade log to report on, so n_trades/win_rate/profit_factor/SQN are "
+      "always 0 or None here by design. Return/drawdown/Sortino/Calmar below are the real "
+      "bottom-line numbers for the combined portfolio.",
+      _stat_tiles_html(metrics),
+  )}
+
+  {''.join(sections)}
+</body>
+</html>
+"""
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     return out_path

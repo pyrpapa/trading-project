@@ -206,6 +206,7 @@ def main():
         cfg["entry"]["ma_period"], cfg["entry"]["volume_ma_period"],
         cfg["entry"].get("breakout_period", 0),
         cfg["entry"].get("regime_filter_period", 0),
+        cfg["entry"].get("choppiness_filter_period", 14),
         cfg.get("exit", {}).get("exit_breakout_period", 0),
         cfg["risk"].get("atr_period", 20),
         ps_lookback if ps_enabled else 0,
