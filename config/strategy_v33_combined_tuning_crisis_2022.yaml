@@ -1,0 +1,41 @@
+# v33 combined candidate -- 2020-2022 (Terra/FTX crash) window.
+# See strategy_v33_combined_tuning.yaml for the full rationale.
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LINK-USD
+  - RENDER-USD
+
+entry:
+  ma_period: 10               # was 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 20.0      # was 35.0
+  max_invested_pct: 100.0     # was 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+
+backtest:
+  starting_cash: 10000
+  start_date: "2020-06-01"
+  end_date: "2022-12-31"
+  commission_pct: 0.0

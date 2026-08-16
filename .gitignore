@@ -15,3 +15,7 @@ results/*_summary.md
 results/*_trades.csv
 /*_summary.md
 /*_trades.csv
+
+# Same rationale, for parameter_sweep.py's output -- fully regeneratable
+# with `python parameter_sweep.py`.
+results/parameter-sweep/

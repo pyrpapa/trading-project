@@ -133,24 +133,86 @@
 # (2023-2026 unaffected -- both were long past the filter period old by then).
 # The numbers above already reflect the fix.
 #
-# HONEST TRADEOFFS, not just headline numbers (8-asset watchlist, DOGE
-# removed, DOT/UNI/BCH/FIL rejected, 150-day regime filter + OR fallback):
-#   - 2019-2024: 15385.55% total / 131.87%/yr / -43.05% DD
-#   - 2020-2022 crisis: 1168.48% total / 167.51%/yr / -42.78% DD
-#   - 2023-2026 crisis: 280.71% total / 44.96%/yr / -35.01% DD
-#   - Even with the regime filter, return is still concentrated in a
-#     handful of outlier trades (a huge SOL 2023-2024 run, an early BTC
-#     2020-2021 trade) -- treat the headline annualized numbers as "what
-#     happened when a few outlier events landed AND the regime filter
-#     let them through," not "the typical year to expect."
-#   - Standard SQN penalizes crypto's large, dispersed UPSIDE the same
-#     way it would penalize unpredictable losses -- a downside-only
-#     (Sortino-style) version of the same metric actually favors crypto
-#     over the equities track (checked directly on crypto_master: 39.2 vs
-#     22.1; not recomputed for this exact watchlist, but the same
-#     distortion applies -- downside R-multiple dispersion is nearly
-#     identical to the equities track, both tightly bounded by the same
-#     2N stop; the gap is entirely from bigger, more variable wins).
+# SORTINO ADOPTED AS THE PRIMARY RISK-ADJUSTED METRIC, kept alongside
+# SQN rather than replacing it (backtest/engine.py's compute_metrics):
+# annualized return / annualized downside deviation of period returns,
+# MAR=0. Chosen over a homemade "downside-only SQN" variant because it
+# has a widely-used EXTERNAL interpretation scale (<0 bad, 0-1 sub-par,
+# 1-2 good, 2-3 very good, >3 excellent) -- a given number means
+# something without having to rebuild the whole distribution to
+# interpret it, unlike a project-specific R-multiple variant.
+#
+# v36 PROMOTED (parameter_sweep.py's first full run, then v33 -> v34 ->
+# v35 -> v36, each isolated/validated before combining):
+#   entry.ma_period: 20 -> 10 (v33) -- faster entries, more trades, real
+#     edge in 2 of 3 windows including the most-relevant one
+#   risk.max_position_pct: 35.0 -> 20.0 (v33) -- tighter per-position cap,
+#     more diversification across simultaneous positions; ALONE this
+#     improved drawdown in every window, it's max_invested_pct pushing
+#     it back up (see below) that costs the drawdown, not this
+#   risk.max_invested_pct: 80.0 -> 90.0 (v33 tried 100, v34 found 90 beat
+#     100 on EVERY metric in all 3 windows -- less cash buffer means
+#     occasionally missing a fresh signal because no cash is free, and
+#     that lost-opportunity cost outweighs the extra 10% of deployment)
+#   risk.trailing_stop.enabled: true, atr_multiple: 2.0 (NEW mechanism,
+#     v35) -- see below
+#
+# WHY THE TRAILING STOP WAS BUILT: a real gap in the exit logic --
+# neither the (static, entry-based) stop-loss nor the 10-day Donchian
+# trend-exit protects a SHARP spike that reverses fast. The Donchian
+# exit only fires once price breaks the rolling 10-day low, which
+# hasn't had time to ratchet up if the whole spike-and-reverse happens
+# inside roughly one exit_breakout_period window -- a trade could
+# nearly fully round-trip a big spike before either mechanism catches
+# it. Fixed with a NEW opt-in risk.trailing_stop block
+# (backtest/engine.py): tracks the highest CLOSE seen since a stack's
+# entry and pulls the stop up to (that peak - atr_multiple * CURRENT
+# day's N), only ever up, never down. Runs independently of
+# pyramiding, which only trails the stop in discrete 0.5N-interval
+# jumps tied to add events -- a fast spike that never triggers an add
+# got NO protection from pyramiding alone.
+#
+# TESTED IN ISOLATION FIRST (v35, trailing stop alone on the
+# then-current 8-asset/ma_period-20 baseline) before combining with
+# anything: improved drawdown, Sortino, SQN, and win rate in every
+# window (2020-2022 improved on literally every metric including raw
+# return), near-free in 2 of 3 windows, ~9% return cost in 2023-2026.
+#
+# COMBINED WITH v34 (v36) rather than v33 -- confirmed max_invested_pct
+# and the trailing stop are NOT substitutes for each other: re-tested
+# the trailing stop against v33's full 100% deployment too (v37) and it
+# was consistently WORSE than combining with v34's 90% (worse drawdown
+# in all 3 windows, worse Sortino in all 3, for only a small/inconsistent
+# return gain). The cash buffer protects against being fully deployed
+# across correlated positions when the WHOLE watchlist drops together;
+# the trailing stop protects each position individually -- different
+# failure modes, both still worth having.
+#
+# HONEST TRADEOFFS, not just headline numbers (6-asset watchlist,
+# ma_period 10, max_position_pct 20, max_invested_pct 90, 150-day
+# regime filter + OR fallback, trailing stop at 2.0N):
+#   - 2019-2024: 13099.56% total / 125.77%/yr / -41.53% DD / Sortino 4.622 / SQN 6.392
+#     (was 15385.55% / 131.87%/yr / -43.05% DD / Sortino 4.122 / SQN 4.622)
+#   - 2020-2022 crisis: 1368.77% total / 183.13%/yr / -41.53% DD / Sortino 5.742 / SQN 5.123
+#     (was 1168.48% / 167.51%/yr / -42.78% DD / Sortino 4.840 / SQN 3.405)
+#   - 2023-2026 crisis: 303.46% total / 47.32%/yr / -31.56% DD / Sortino 2.174 / SQN 2.866
+#     (was 280.71% / 44.96%/yr / -35.01% DD / Sortino 1.830 / SQN 2.283)
+#   - Drawdown improved in ALL THREE windows vs. the prior config, not
+#     just held flat -- the one real cost is 2019-2024's total return
+#     (-14.9%), the window this file's own header already treats as the
+#     least representative (concentrated in a handful of outlier
+#     trades). Both crisis windows, including the most-relevant
+#     2023-2026 one, improved on return, drawdown, AND both
+#     risk-adjusted metrics simultaneously.
+#   - Trade count roughly doubled in some windows (ma_period:10 fires
+#     more often, the trailing stop closes more/smaller-give-back
+#     trades) -- win rate rose accordingly in every window (e.g.
+#     2023-2026: 32.96% -> 37.7%), consistent with the trailing stop
+#     converting former near-full-round-trip losers into smaller,
+#     cleaner wins rather than the edge per trade actually improving.
+#   - Full parameter_sweep.py results (every risk/entry/exit knob swept
+#     one-at-a-time first) are in results/parameter-sweep/ if you want
+#     to see what else was tried and rejected before landing here.
 #
 # SCHEDULING: crypto trades 24/7 with daily bars anchored to UTC
 # midnight, unlike equities (anchored to the 4pm ET close). The GitHub
@@ -184,7 +246,7 @@ watchlist:
   - RENDER-USD
 
 entry:
-  ma_period: 20
+  ma_period: 10               # was 20 -- see "v36 PROMOTED" above
   volume_confirmation: true
   volume_ma_period: 20
   regime_filter_period: 150
@@ -201,12 +263,15 @@ risk:
   atr_period: 20
   risk_pct_per_unit: 1.5
   stop_atr_multiple: 2.0
-  max_position_pct: 35.0
-  max_invested_pct: 80.0
+  max_position_pct: 20.0      # was 35.0 -- see "v36 PROMOTED" above
+  max_invested_pct: 90.0      # was 80.0 -- see "v36 PROMOTED" above
   pyramiding:
     enabled: true
     unit_interval_n: 0.5
     max_units: 4
+  trailing_stop:              # NEW -- see "WHY THE TRAILING STOP WAS BUILT" above
+    enabled: true
+    atr_multiple: 2.0
 
 backtest:
   starting_cash: 10000

@@ -1,0 +1,77 @@
+# v35 -- ISOLATED test of the new risk.trailing_stop feature
+# (backtest/engine.py), added in direct response to a real gap: a sharp
+# spike-and-reverse that happens fast enough could round-trip almost
+# entirely before either the static entry-based stop OR the 10-day
+# Donchian-low trend-exit ever fires (the rolling 10-day low hasn't had
+# time to ratchet up yet if the whole spike-and-reverse happens within
+# roughly one exit_breakout_period window).
+#
+# Deliberately built on the CURRENT LIVE master config (not v33/v34) --
+# only ONE change from strategy_master.yaml, so this isolates the
+# trailing stop's own effect before it gets combined with anything else,
+# same "isolate one variable" discipline as every other vN config here.
+#
+#   risk.trailing_stop.enabled: true
+#   risk.trailing_stop.atr_multiple: 2.0  (same distance as the existing
+#     entry stop_atr_multiple, so the trailing stop's distance-from-peak
+#     matches the original stop's distance-from-entry -- a fair
+#     apples-to-apples starting point, not a tighter/looser trail by
+#     construction)
+#
+# Mechanism (see backtest/engine.py's new peak-based trailing stop
+# block): every day, tracks the highest CLOSE seen since a stack's
+# entry and pulls stack[0].stop_price up to
+# (that peak - atr_multiple * current-day N) -- using CURRENT N, same
+# "recompute at current volatility" convention pyramid adds already use.
+# Only moves the stop UP, never down. Runs independently of pyramiding,
+# so even a spike that never triggers a pyramid add (needs a full 0.5N
+# move in favor first) still gets SOME protection here.
+#
+# This is the 2019-2024 window. See _crisis_2022 and _crisis_2026
+# sibling files for the other two standard windows.
+#
+# Compare against the live config:
+#   python run_backtest.py --config config/strategy_v35_trailing_stop.yaml --chart --save --label "v35-trailing-stop"
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+
+watchlist:
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+  - XRP-USD
+  - LINK-USD
+  - RENDER-USD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+  regime_filter_period: 150
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.5
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+  trailing_stop:
+    enabled: true
+    atr_multiple: 2.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0
