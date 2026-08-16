@@ -1,255 +1,115 @@
 # MASTER STRATEGY -- the config intended to actually run against Alpaca
 # (paper first) via live/run_live.py and the GitHub Actions daily
-# schedule. Previously this was an equities config (SPY/AAPL/MSFT/NVDA)
-# -- that track is preserved unchanged at config/strategy_equities_master.yaml,
-# still fully valid, just no longer the live default. This file started
-# as v25's 9-asset expanded crypto watchlist; DOGE-USD was removed
-# (see "WHY DOGE WAS DROPPED" below) leaving 8 assets. Chosen
-# deliberately over the more conservative config/strategy_crypto_master.yaml
-# (BTC/ETH only, -28% to -30% drawdown range) in favor of bigger
-# backtested returns and more frequent trade activity, at the cost of
-# meaningfully deeper drawdown (-58% to -60% range). That tradeoff was
-# made knowingly, not by default -- see "HONEST TRADEOFFS" below before
-# assuming this is a strict upgrade over crypto_master.
+# schedule. Previously this was crypto (v25-v36, BTC/ETH/SOL/XRP/LINK/
+# RENDER) -- that track is preserved unchanged at
+# config/strategy_master_crypto_v36.yaml, still fully valid, just no
+# longer the live default. This file is now 3x LEVERAGED ETFs, applying
+# the exact same signal/entry/exit/sizing/pyramiding logic (originally
+# config/strategy_v22_leveraged_etfs.yaml) to a wider basket than v22's
+# original 3 tickers, plus the trailing stop built for crypto, ported
+# here after it proved out on this asset class too.
 #
-# Validated across THREE historical crypto crises (2017-2019's ~84% BTC
-# crash, 2020-2022's Terra/FTX crash, 2023-2026's ATH-into-crash cycle --
-# see config/strategy_master_crisis_2026.yaml) plus the calm 2019-2024
-# window -- but NOT to the same depth as the equities track (a dozen-
-# plus rejected alternatives tested against a real 2008-style crash).
+# WHY THE PIVOT (2026-08-16): a deliberate reassessment, not a snap
+# decision -- crypto's backtested headline numbers (10,000%+ in the
+# best windows) turned out to be mostly BETA, not durable strategy
+# skill. Every defensive lever tried this session (trailing stop,
+# tighter position caps, a crypto/equity rotation overlay, a
+# purpose-built choppiness filter) bought safety by giving up return,
+# and the SIZE of that trade -- 13,100% down to 2,500% in the most
+# protective version -- said the underlying edge was thinner than the
+# raw numbers implied. The real test: crypto LOST money over the
+# trailing 12 months (-15.0%), and nothing tried fixed that without
+# also gutting the windows that worked. Leveraged ETFs, tested on the
+# exact same trailing-12-month window, made +35.55% with healthier
+# trade quality (29 trend-exits vs 16 stop-losses on the plain-equity
+# version, vs crypto's 32-of-33 stop-loss pattern) -- the entry/exit
+# mechanics visibly working as designed here, not fighting whipsaw.
+# Crypto isn't abandoned -- config/strategy_master_crypto_v36.yaml is
+# fully preserved -- it's just no longer the PRIMARY strategy. The plan
+# going forward is crypto as its own separate, deliberately smaller
+# allocation later, not blended into this one.
 #
-# THE 2023-2026 WINDOW IS THE MOST SOBERING RESULT OF THE THREE, AND
-# THE MOST RELEVANT ONE (closest to right now): 9.56% total / 2.57%/yr
-# / -57.16% DD / SQN 2.122, vs buy-and-hold's 146.19% / -70.23% DD over
-# the same period -- the strategy captured only ~6.5% of buy-and-hold's
-# return here (vs ~50-56% in every other window), and the drawdown
-# reduction was much smaller in relative terms too (~19% less than
-# buy-and-hold, vs ~50%+ in the other two crisis windows). This longer,
-# more complex window (2023 recovery -> 2024-2025 bull run -> 2025-10-06
-# ATH at $126,198 -> June 2026 crash to ~$65,600) gave trend-following
-# more chances to whipsaw through choppy stretches than the other two,
-# cleaner runup-into-crash windows did. This directly overlaps with,
-# and explains, the rough recent live/paper-trading regime -- don't
-# read the 2019-2024/2020-2022 numbers as the reliable expectation
-# without weighing this one too.
+# WATCHLIST WIDENED FROM v22's ORIGINAL 3 (SPXL/TQQQ/SOXL) TO 6, adding
+# FAS (3x financials), TNA (3x small-caps), TECL (3x tech): tested
+# WITHOUT the trailing stop first and it was a clear loss (worse return
+# AND worse Sortino than the 3-ticker version, on the last-12mo window)
+# -- classic ticker-dilution, same lesson this project has hit
+# repeatedly on the crypto side (v15's blanket expansion, DOT/UNI/BCH/
+# FIL). Only WITH the trailing stop does the wider watchlist pay off:
+#   last-12mo, 3 tickers, no trailing stop:  +46.06% return / -23.64% DD / Sortino 1.265
+#   last-12mo, 6 tickers, no trailing stop:  +38.96% return / -26.46% DD / Sortino 1.092  (worse both ways)
+#   last-12mo, 6 tickers, + trailing stop:   +35.55% return / -21.04% DD / Sortino 1.544  (best Sortino of all three)
+# Chose the 6-ticker + trailing-stop version over the higher-raw-return
+# 3-ticker baseline deliberately -- the 3-ticker version's return was
+# concentrated almost entirely in ONE ticker (SOXL, +$2,193.70 of the
+# $2,281.52 total trade P&L) -- a fragile, single-name-dependent result,
+# not something to trust as the primary strategy. The wider watchlist
+# is a genuine (if partial) diversification improvement, not just more
+# tickers for their own sake.
 #
-# WHY DOGE WAS DROPPED: checked directly -- ~42.6% of v25's ENTIRE
-# 2019-2024 profit came from two DOGE-USD trades within the same few
-# months in 2024, tied to a specific, likely non-repeatable social/
-# political catalyst. Removed it in favor of a more representative
-# result, at the cost of a much smaller headline number (see below).
+# TRAILING STOP (backtest/engine.py's risk.trailing_stop, same
+# mechanism built for and validated on crypto): ported here and
+# re-validated independently on THIS asset class rather than assumed
+# to transfer -- it does help, same direction as crypto (better return,
+# better drawdown, better Sortino, all at once, in the last-12mo test
+# above). NOT assumed for two other crypto wins tested and found NOT to
+# transfer: the regime filter actually HURT here (return 2.69%->1.06%
+# on the plain-equity version) and a looser exit_breakout_period also
+# hurt (looser = worse here, tighter for crypto = worse there --
+# genuinely different assets, don't assume a lever ports just because
+# it worked once).
 #
-# WHY DOT/UNI/BCH/FIL WERE TESTED AND REJECTED (config/strategy_v26_crypto_candidates.yaml):
-# all 4 confirmed tradable on Alpaca with solid history, deliberately
-# chosen as established/utility-driven rather than another meme coin --
-# but diluted returns AND made drawdown meaningfully worse in BOTH
-# windows tested (2019-2024: 3016.65%/77.47%/yr/-60.29% DD down to
-# 865.56%/45.96%/yr/-72.01% DD; 2020-2022: similar pattern). Same
-# ticker-dilution lesson as the equities side, just proven false for
-# THIS specific set of additions rather than universally true for
-# crypto (SOL/XRP/LTC/ADA/AVAX/LINK, already in this watchlist, DID
-# help when added in v25 -- more tickers isn't automatically bad
-# either, it has to be checked each time).
+# HONEST WEAK SPOT, validated across all four standard windows before
+# promoting (not just the target last-12mo window -- same discipline
+# every other promotion in this project has followed):
+#   2019-2024:          215.63% total /  21.14%/yr / -33.63% DD / Sortino 1.018 / Calmar 0.629
+#   2020-2022 crisis:     -0.72% total /  -0.28%/yr / -33.63% DD / Sortino -0.012 / Calmar -0.008
+#   2023-2026 crisis:    108.99% total /  22.78%/yr / -32.50% DD / Sortino 1.168 / Calmar 0.701
+#   last-12mo:             35.55% total /  35.69%/yr / -21.04% DD / Sortino 1.544 / Calmar 1.696
+# 2020-2022 is essentially FLAT (near-zero Sortino), despite spanning
+# both the COVID recovery bull run and the 2022 crash -- consistent
+# with what v22's own original header warned about before this was
+# ever tested through a real crash: daily-reset 3x leverage compounds
+# losses on the way down the same way it compounds gains on the way up,
+# plus volatility decay during any choppy/sideways stretch. This is a
+# real, known weakness, not hidden here -- weigh it before trusting the
+# other three windows' numbers as the typical case.
 #
-# REGIME FILTER ADDED (v27, config/strategy_v27_regime_filter.yaml):
-# entry.regime_filter_period -- requires price above a slow moving
-# average, in addition to the existing 20-day crossover + volume
-# confirmation, before taking an entry. Built specifically in response
-# to the 2023-2026 window's whipsaw problem (292 trades, 31.85% win
-# rate, SQN 2.122) -- don't take the fast signal unless the slower,
-# macro trend agrees. First tested at 200 days, improved return AND
-# drawdown SIMULTANEOUSLY vs no filter in all three windows.
+# VS SIMPLE BUY-AND-HOLD (SPY, same last-12mo window): SPY alone made
+# +21.99% with only -8.88% max drawdown (Calmar 2.48) -- this strategy's
+# +35.55%/-21.04% (Calmar 1.696) beats SPY on raw return but takes on
+# meaningfully more risk to get there. Beta/alpha vs SPY are now
+# computed automatically for every real (non-synthetic) backtest run
+# (see run_backtest.py) specifically so this comparison doesn't have to
+# be redone by hand each time -- check them before trusting a "beat the
+# benchmark" headline number.
 #
-# SWEPT afterward (50/75/100/150/200/250/300) across all three windows
-# -- 150 beat 200 (and everything else) on RETURN in all three windows
-# simultaneously, not just on average, with drawdown that's either
-# better than 200 (2019-2024) or essentially tied with it (the other
-# two). 250/300 get somewhat lower drawdown but give up much more
-# return than the drawdown improvement is worth (e.g. 2020-2022: 250 vs
-# 150 only improves DD by ~8pts while giving up ~12.5pts of annualized
-# return). Settled on 150, not the original 200:
-#   2019-2024:        3016.65%/77.47%/yr/-60.29% DD (no filter) -> 10446.41%/117.48%/yr/-41.97% DD (150-day)
-#   2020-2022 crisis:   436.54%/91.69%/yr/-58.07% DD (no filter) ->  1009.25%/153.96%/yr/-41.97% DD (150-day)
-#   2023-2026 crisis:     9.56%/2.57%/yr/-57.16% DD (no filter) ->   153.21%/29.44%/yr/-38.82% DD (150-day)
-# Trade count fell across the board vs no filter at all, consistent with
-# the filter cutting whipsaw trades that weren't part of a real macro
-# trend -- confirmed with a synthetic sandbox test before trusting it.
+# GITHUB ACTIONS SCHEDULE: switched back to equities market hours
+# (weekdays, after the 4pm ET close) -- see
+# .github/workflows/daily-trading-check.yml. Crypto's old 24/7,
+# every-day-of-the-week schedule does NOT apply to ETFs.
 #
-# RETESTED two previously-rejected ideas with the regime filter active,
-# to check whether their original failures were really about whipsaw:
-# both stayed rejected (config/strategy_v28_candidates_with_regime_filter.yaml
-# -- DOT/UNI/BCH/FIL still diluted/hurt; config/strategy_v29_let_it_ride_regime_filter.yaml
-# -- wider stops/slower exit still hurt). Confirms those are real,
-# independent findings, not artifacts of unfiltered whipsaw.
-#
-# RENDER-USD ADDED (config/strategy_v31_defi_candidates.yaml tested
-# AAVE/CRV/LDO/RENDER bundled together and was REJECTED -- worse
-# drawdown in all three windows despite the 4 picks spanning genuinely
-# different drivers: DeFi lending, DEX infrastructure, ETH liquid
-# staking, AI/GPU compute). Bundling masked a real individual winner --
-# tested each of the 4 ADDED ALONE afterward: AAVE, CRV, and LDO were
-# all clear rejections individually too (worse than the 8-asset
-# baseline on every metric, every window -- unsurprising in hindsight,
-# AAVE and LDO both correlate heavily with ETH, already in the
-# watchlist, so they add correlated exposure more than real
-# diversification). RENDER alone was different: beat the 8-asset
-# baseline on return AND SQN in all three windows, and even improved
-# drawdown in 2023-2026 (-36.92% vs -38.82%) -- the only ticker-
-# addition experiment all session to show a genuine, consistent,
-# multi-window win. Cost: modestly worse drawdown in the other two
-# windows (~3-5 points). RENDER's AI/GPU-compute driver is genuinely
-# distinct from the L1/DeFi/staking character of the rest of the
-# watchlist, plausibly why it added real value where AAVE/CRV/LDO
-# (correlated to what's already here) didn't.
-#
-# AVAX/LTC/ADA DROPPED (leave-one-out analysis on the 9-asset
-# watchlist -- removed each of SOL/XRP/LTC/ADA/AVAX/LINK/RENDER one at
-# a time, all three windows, comparing against the full 9-asset
-# baseline). SOL, XRP, and LINK all showed real, substantial value
-# (especially in the 2 bigger windows) and were kept. AVAX was the
-# clearest "cut this" signal of the whole session -- removing it
-# improved BOTH return and drawdown in all three windows, not a mixed
-# picture. LTC and ADA showed the same direction more softly (better or
-# essentially neutral everywhere, never a clear net-positive
-# contributor). Tested dropping all three TOGETHER (not just
-# individually) -- the combined effect compounded, better than any
-# single removal alone suggested (e.g. 2019-2024 total return went to
-# 15385.55%, higher than removing AVAX alone gave on its own,
-# 14575.25%) -- less capital tied up in the weaker performers left more
-# room for SOL/XRP/LINK/RENDER/BTC/ETH to size up. Improved return AND
-# drawdown in all three windows, the same clean signature the regime
-# filter and RENDER's addition both had.
-#
-# OR FALLBACK FOR NEWLY-LISTED ASSETS: regime_ma is NaN (and NaN
-# comparisons are always False in pandas) for the first
-# regime_filter_period days of ANY asset's OWN history -- without a
-# fix, a newly-listed, more speculative coin would be fully locked out
-# of trading for its first ~150 days (at the current setting), exactly
-# when its first big move is most likely. Fixed with an OR: (regime
-# confirms) OR (not enough history to judge it at all). Verified this
-# wasn't just a theoretical edge case -- SOL-USD and AVAX-USD, already
-# in this watchlist, only started trading in 2020 and were actually
-# affected by this within the 2019-2024 and 2020-2022 windows
-# (2023-2026 unaffected -- both were long past the filter period old by then).
-# The numbers above already reflect the fix.
-#
-# SORTINO ADOPTED AS THE PRIMARY RISK-ADJUSTED METRIC, kept alongside
-# SQN rather than replacing it (backtest/engine.py's compute_metrics):
-# annualized return / annualized downside deviation of period returns,
-# MAR=0. Chosen over a homemade "downside-only SQN" variant because it
-# has a widely-used EXTERNAL interpretation scale (<0 bad, 0-1 sub-par,
-# 1-2 good, 2-3 very good, >3 excellent) -- a given number means
-# something without having to rebuild the whole distribution to
-# interpret it, unlike a project-specific R-multiple variant.
-#
-# v36 PROMOTED (parameter_sweep.py's first full run, then v33 -> v34 ->
-# v35 -> v36, each isolated/validated before combining):
-#   entry.ma_period: 20 -> 10 (v33) -- faster entries, more trades, real
-#     edge in 2 of 3 windows including the most-relevant one
-#   risk.max_position_pct: 35.0 -> 20.0 (v33) -- tighter per-position cap,
-#     more diversification across simultaneous positions; ALONE this
-#     improved drawdown in every window, it's max_invested_pct pushing
-#     it back up (see below) that costs the drawdown, not this
-#   risk.max_invested_pct: 80.0 -> 90.0 (v33 tried 100, v34 found 90 beat
-#     100 on EVERY metric in all 3 windows -- less cash buffer means
-#     occasionally missing a fresh signal because no cash is free, and
-#     that lost-opportunity cost outweighs the extra 10% of deployment)
-#   risk.trailing_stop.enabled: true, atr_multiple: 2.0 (NEW mechanism,
-#     v35) -- see below
-#
-# WHY THE TRAILING STOP WAS BUILT: a real gap in the exit logic --
-# neither the (static, entry-based) stop-loss nor the 10-day Donchian
-# trend-exit protects a SHARP spike that reverses fast. The Donchian
-# exit only fires once price breaks the rolling 10-day low, which
-# hasn't had time to ratchet up if the whole spike-and-reverse happens
-# inside roughly one exit_breakout_period window -- a trade could
-# nearly fully round-trip a big spike before either mechanism catches
-# it. Fixed with a NEW opt-in risk.trailing_stop block
-# (backtest/engine.py): tracks the highest CLOSE seen since a stack's
-# entry and pulls the stop up to (that peak - atr_multiple * CURRENT
-# day's N), only ever up, never down. Runs independently of
-# pyramiding, which only trails the stop in discrete 0.5N-interval
-# jumps tied to add events -- a fast spike that never triggers an add
-# got NO protection from pyramiding alone.
-#
-# TESTED IN ISOLATION FIRST (v35, trailing stop alone on the
-# then-current 8-asset/ma_period-20 baseline) before combining with
-# anything: improved drawdown, Sortino, SQN, and win rate in every
-# window (2020-2022 improved on literally every metric including raw
-# return), near-free in 2 of 3 windows, ~9% return cost in 2023-2026.
-#
-# COMBINED WITH v34 (v36) rather than v33 -- confirmed max_invested_pct
-# and the trailing stop are NOT substitutes for each other: re-tested
-# the trailing stop against v33's full 100% deployment too (v37) and it
-# was consistently WORSE than combining with v34's 90% (worse drawdown
-# in all 3 windows, worse Sortino in all 3, for only a small/inconsistent
-# return gain). The cash buffer protects against being fully deployed
-# across correlated positions when the WHOLE watchlist drops together;
-# the trailing stop protects each position individually -- different
-# failure modes, both still worth having.
-#
-# HONEST TRADEOFFS, not just headline numbers (6-asset watchlist,
-# ma_period 10, max_position_pct 20, max_invested_pct 90, 150-day
-# regime filter + OR fallback, trailing stop at 2.0N):
-#   - 2019-2024: 13099.56% total / 125.77%/yr / -41.53% DD / Sortino 4.622 / SQN 6.392
-#     (was 15385.55% / 131.87%/yr / -43.05% DD / Sortino 4.122 / SQN 4.622)
-#   - 2020-2022 crisis: 1368.77% total / 183.13%/yr / -41.53% DD / Sortino 5.742 / SQN 5.123
-#     (was 1168.48% / 167.51%/yr / -42.78% DD / Sortino 4.840 / SQN 3.405)
-#   - 2023-2026 crisis: 303.46% total / 47.32%/yr / -31.56% DD / Sortino 2.174 / SQN 2.866
-#     (was 280.71% / 44.96%/yr / -35.01% DD / Sortino 1.830 / SQN 2.283)
-#   - Drawdown improved in ALL THREE windows vs. the prior config, not
-#     just held flat -- the one real cost is 2019-2024's total return
-#     (-14.9%), the window this file's own header already treats as the
-#     least representative (concentrated in a handful of outlier
-#     trades). Both crisis windows, including the most-relevant
-#     2023-2026 one, improved on return, drawdown, AND both
-#     risk-adjusted metrics simultaneously.
-#   - Trade count roughly doubled in some windows (ma_period:10 fires
-#     more often, the trailing stop closes more/smaller-give-back
-#     trades) -- win rate rose accordingly in every window (e.g.
-#     2023-2026: 32.96% -> 37.7%), consistent with the trailing stop
-#     converting former near-full-round-trip losers into smaller,
-#     cleaner wins rather than the edge per trade actually improving.
-#   - Full parameter_sweep.py results (every risk/entry/exit knob swept
-#     one-at-a-time first) are in results/parameter-sweep/ if you want
-#     to see what else was tried and rejected before landing here.
-#
-# SCHEDULING: crypto trades 24/7 with daily bars anchored to UTC
-# midnight, unlike equities (anchored to the 4pm ET close). The GitHub
-# Actions schedule was updated accordingly -- see
-# .github/workflows/daily-trading-check.yml -- to fire after the crypto
-# day actually closes, every day of the week (not just weekdays).
-#
-# SYMBOL FORMAT: yfinance (used for backtesting/signals) uses 'BTC-USD'
-# (hyphen); Alpaca's own symbol format is 'BTC/USD' (slash) -- confirmed
-# directly via the API. broker/alpaca_client.py now translates between
-# the two automatically (_to_alpaca_symbol / _from_alpaca_symbol) so
-# every config in this project, and this file's watchlist, stays in the
-# canonical yfinance/hyphen format -- no special-casing needed here.
-#
-# Compare against crypto_master (the more conservative BTC/ETH-only
-# choice) and the preserved equities track:
-#   python run_backtest.py --config config/strategy_crypto_master.yaml --chart --save --label "crypto-master-compare"
-#   python run_backtest.py --config config/strategy_equities_master.yaml --chart --save --label "equities-master-compare"
+# Compare against the preserved crypto track:
+#   python run_backtest.py --config config/strategy_master_crypto_v36.yaml --chart --save --label "crypto-v36-compare"
 #   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python blend_backtest.py --chart   # ETF/crypto blend explored before this pivot, kept for reference
 #
 # To actually run this against Alpaca paper trading:
 #   python live/run_live.py --dry-run --config config/strategy_master.yaml
 #   python live/run_live.py --config config/strategy_master.yaml
 
 watchlist:
-  - BTC-USD
-  - ETH-USD
-  - SOL-USD
-  - XRP-USD
-  - LINK-USD
-  - RENDER-USD
+  - SPXL
+  - TQQQ
+  - SOXL
+  - FAS
+  - TNA
+  - TECL
 
 entry:
-  ma_period: 10               # was 20 -- see "v36 PROMOTED" above
+  ma_period: 20
   volume_confirmation: true
   volume_ma_period: 20
-  regime_filter_period: 150
 
 exit:
   ma_exit: true
@@ -261,15 +121,15 @@ exit:
 risk:
   sizing_method: atr_unit
   atr_period: 20
-  risk_pct_per_unit: 1.5
+  risk_pct_per_unit: 1.0
   stop_atr_multiple: 2.0
-  max_position_pct: 20.0      # was 35.0 -- see "v36 PROMOTED" above
-  max_invested_pct: 90.0      # was 80.0 -- see "v36 PROMOTED" above
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
   pyramiding:
     enabled: true
     unit_interval_n: 0.5
     max_units: 4
-  trailing_stop:              # NEW -- see "WHY THE TRAILING STOP WAS BUILT" above
+  trailing_stop:
     enabled: true
     atr_multiple: 2.0
 

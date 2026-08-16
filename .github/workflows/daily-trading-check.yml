@@ -2,16 +2,14 @@ name: Daily trading check
 
 on:
   schedule:
-    # config/strategy_master.yaml is now crypto (v25) -- crypto trades
-    # 24/7 with daily bars anchored to UTC MIDNIGHT (not a market close
-    # like equities). 00:30 UTC = 30 min after the crypto day actually
-    # closes, every day of the week (crypto doesn't skip weekends, so
-    # neither does this -- "* * *" not "1-5"). If you switch this back
-    # to config/strategy_equities_master.yaml, switch this back too --
-    # see that file's own header and the equities-era git history for
-    # the original "30 20 * * 1-5" (20:30 UTC, weekdays, after the 4pm
-    # ET stock market close).
-    - cron: "30 0 * * *"
+    # config/strategy_master.yaml is now leveraged ETFs (2026-08-16 pivot
+    # -- see that file's own header for the full reasoning) -- back to
+    # equities market hours, weekdays only. 30 20 * * 1-5 = 20:30 UTC
+    # (4:30pm ET), 30 min after the stock market close, Mon-Fri only.
+    # If you switch back to config/strategy_master_crypto_v36.yaml
+    # (crypto, 24/7, no weekday restriction), switch this back to
+    # "30 0 * * *" too -- see that file's own header.
+    - cron: "30 20 * * 1-5"
   workflow_dispatch:
     inputs:
       strategy_config:
