@@ -178,6 +178,26 @@ class AlpacaBroker:
         return float(trade.price)
 
     def close_position(self, symbol: str):
-        """`symbol` is canonical (yfinance-style) -- translated internally."""
-        order = self.client.close_position(_to_alpaca_symbol(symbol))
-        return {"id": str(order.id), "symbol": symbol, "status": str(order.status)}
+        """
+        `symbol` is canonical (yfinance-style) -- translated internally.
+
+        Submits an explicit market SELL order for the full held quantity,
+        rather than using the SDK's own close_position() convenience
+        endpoint. Confirmed directly (404 on a real LINK-USD close) that
+        the SDK's close_position() puts the symbol straight into the URL
+        PATH (DELETE /v2/positions/{symbol}) without encoding it --
+        crypto symbols contain a literal "/" (e.g. LINK/USD), which
+        splits into two path segments there instead of one symbol, so
+        the request 404s. This would have silently broken any AUTOMATIC
+        crypto stop-loss/trend-exit close too, not just a manual one --
+        live/run_live.py calls this same method. Submitting an order
+        instead sidesteps the bug entirely, since the symbol travels in
+        the JSON request body there, not the URL path -- same code path
+        submit_market_order() already uses successfully for entries.
+        """
+        positions = self.get_positions()
+        if symbol not in positions:
+            raise ValueError(f"No open position in {symbol!r} to close.")
+        qty = positions[symbol]["qty"]
+        order = self.submit_market_order(symbol, qty=qty, side="sell")
+        return {"id": order["id"], "symbol": symbol, "status": order["status"]}
