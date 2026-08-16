@@ -1,0 +1,49 @@
+name: Close a position manually
+
+# On-demand only -- no schedule. Go to the Actions tab -> "Close a
+# position manually" -> "Run workflow", type the ticker, and run.
+# dry_run defaults to true so a first run always just SHOWS what would
+# happen (current price, P&L, etc.) without touching anything -- you
+# have to deliberately switch it to false to actually close the
+# position. Same safety shape as live/run_live.py's own --dry-run flag.
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: "Ticker to close (canonical format, e.g. LINK-USD or AAPL). Leave blank to just list current positions."
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run (show what would happen, close nothing)"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  close-position:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Close position
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER: "true"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ -z "${{ inputs.ticker }}" ]; then
+            python live/close_position.py --list
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+            python live/close_position.py --ticker "${{ inputs.ticker }}" --dry-run
+          else
+            python live/close_position.py --ticker "${{ inputs.ticker }}"
+          fi
