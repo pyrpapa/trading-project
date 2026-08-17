@@ -112,6 +112,16 @@ def main():
     max_invested_pct = cfg["risk"]["max_invested_pct"] / 100
     sizing_method = cfg["risk"].get("sizing_method", "pct")  # "pct" (v1-v4) or "atr_unit" (Turtle-style)
 
+    # Per-ticker position-size override -- see backtest/engine.py for the
+    # full rationale (a calm ticker mixed into a choppier watchlist gets
+    # oversized by the shared ATR-based formula). Mirrored here so live
+    # sizing matches whatever a backtest with the same config produced.
+    ticker_overrides_cfg = cfg["risk"].get("ticker_overrides") or {}
+
+    def max_position_pct_for(ticker):
+        override = (ticker_overrides_cfg.get(ticker) or {}).get("max_position_pct")
+        return (override / 100) if override is not None else max_position_pct
+
     correlation_cfg = cfg["risk"].get("correlation_breaker") or {}
     correlation_enabled = correlation_cfg.get("enabled", False)
     corr_lookback = correlation_cfg.get("lookback_period", 60)
@@ -361,7 +371,7 @@ def main():
             atr_allocation = (dollar_risk_budget / risk_per_share) * current_price
 
             stack_value = pos["market_value"]  # today's mark on the WHOLE existing stack
-            max_position_value = portfolio_value * max_position_pct
+            max_position_value = portfolio_value * max_position_pct_for(ticker)
             room_in_position = max_position_value - stack_value
             room_left = (portfolio_value * max_invested_pct) - invested_value
             allocation = min(atr_allocation, room_in_position, room_left, cash_remaining)
@@ -455,7 +465,7 @@ def main():
 
         current_price = get_live_price(ticker, df["Close"].iloc[-1])
 
-        max_position_value = portfolio_value * max_position_pct
+        max_position_value = portfolio_value * max_position_pct_for(ticker)
         room_left = (portfolio_value * max_invested_pct) - invested_value
         atr = sig_df["atr"].iloc[-1] if "atr" in sig_df.columns else None
         sizing_note = None

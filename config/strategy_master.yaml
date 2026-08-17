@@ -9,6 +9,52 @@
 # original 3 tickers, plus the trailing stop built for crypto, ported
 # here after it proved out on this asset class too.
 #
+# GOALPOSTS SETTLED (2026-08-17), driving every promotion decision from
+# here on: more risk than plain buy-and-hold (SPY) is fine ONLY if it's
+# genuinely compensated risk-adjusted (Calmar/Sortino/alpha vs SPY, all
+# computed automatically by backtest/engine.py's compute_metrics for
+# every real run) -- not just tolerated for a higher raw-return number.
+# Personal drawdown ceiling: 15-30%, elastic upward if the system is
+# demonstrably earning its keep, not a hard wall on its own. Judged over
+# a 1-2 year live/paper horizon, not weeks.
+#
+# v40 -- TIGHTENED BOTH STOPS (2026-08-17): promoted from
+# config/strategy_v40_tight_stops.yaml after a targeted parameter sweep
+# (parameter_sweep.py --params risk_pct_per_unit,stop_atr_multiple,
+# trailing_stop_atr_multiple,max_position_pct,max_invested_pct) run
+# against all 4 standard windows specifically checking Calmar/Sortino/
+# alpha-vs-SPY, not just return, per the goalposts above.
+# stop_atr_multiple 2.0->1.5 and trailing_stop.atr_multiple 2.0->1.0
+# EACH independently won on every metric in every window; combined, they
+# compounded (same pattern as v10+v11's pyramiding+Donchian-exit combo)
+# rather than just stacking or cancelling:
+#   2019-2024:         215.64%/21.14%/yr/-33.63% DD/Calmar 0.629/Sortino 1.018/alpha  7.07  -> 231.44%/22.13%/yr/-28.53% DD/Calmar 0.776/Sortino 1.140/alpha 10.04
+#   2020-2022 crisis:   -0.83%/-0.32%/yr/-33.63% DD/Calmar-0.008/Sortino-0.014/alpha-11.77  ->  15.55%/ 5.76%/yr/-28.53% DD/Calmar 0.202/Sortino 0.269/alpha -3.84
+#   2023-2026 crisis:  108.99%/22.78%/yr/-32.50% DD/Calmar 0.701/Sortino 1.168/alpha -2.08  -> 165.02%/31.17%/yr/-29.94% DD/Calmar 1.041/Sortino 1.624/alpha  7.49
+#   last-12mo:          35.55%/35.69%/yr/-21.04% DD/Calmar 1.696/Sortino 1.544/alpha -0.25  ->  50.41%/50.62%/yr/-18.82% DD/Calmar 2.690/Sortino 2.172/alpha 15.15
+# Clears both goalposts above for the first time this session: every
+# window's drawdown now sits inside or right at the 15-30% ceiling
+# (down from -33.63% in two of four), and alpha vs SPY is positive in 3
+# of 4 windows (up from positive in only 1 of 4) -- the 4th (2020-2022)
+# is still negative but moved from -11.77 to -3.84, the biggest single
+# improvement of any window. Turned 2020-2022 from a real loss into a
+# real (if modest) gain, though it's still the weakest window by a wide
+# margin -- see that window's own honest caveat below, still valid.
+#
+# A same-magnitude tighter GLD (unleveraged, plain gold) addition was
+# also tested this session and explicitly REJECTED, not folded in here
+# -- config/strategy_v38_add_gold*.yaml, config/strategy_v39_gold_capped*.yaml
+# preserved for reference. Uncapped, GLD helped the two most recent
+# windows but made the two older/weaker windows meaningfully worse
+# (traced to its ATR-based position size running 2-4x bigger, in
+# dollars, than the leveraged ETFs' -- a real, now fixable mechanism,
+# see risk.ticker_overrides support added to backtest/engine.py and
+# live/run_live.py this session). A 10%-capped version recovered most
+# but not all of the damage while giving back real upside in the strong
+# windows -- a genuine partial fix, not a clean win either way. Left out
+# of master; revisit if a smarter (regime-aware, not just capped) gold
+# allocation is ever built.
+#
 # WHY THE PIVOT (2026-08-16): a deliberate reassessment, not a snap
 # decision -- crypto's backtested headline numbers (10,000%+ in the
 # best windows) turned out to be mostly BETA, not durable strategy
@@ -61,36 +107,43 @@
 #
 # HONEST WEAK SPOT, validated across all four standard windows before
 # promoting (not just the target last-12mo window -- same discipline
-# every other promotion in this project has followed):
-#   2019-2024:          215.63% total /  21.14%/yr / -33.63% DD / Sortino 1.018 / Calmar 0.629
-#   2020-2022 crisis:     -0.72% total /  -0.28%/yr / -33.63% DD / Sortino -0.012 / Calmar -0.008
-#   2023-2026 crisis:    108.99% total /  22.78%/yr / -32.50% DD / Sortino 1.168 / Calmar 0.701
-#   last-12mo:             35.55% total /  35.69%/yr / -21.04% DD / Sortino 1.544 / Calmar 1.696
-# 2020-2022 is essentially FLAT (near-zero Sortino), despite spanning
-# both the COVID recovery bull run and the 2022 crash -- consistent
-# with what v22's own original header warned about before this was
-# ever tested through a real crash: daily-reset 3x leverage compounds
-# losses on the way down the same way it compounds gains on the way up,
-# plus volatility decay during any choppy/sideways stretch. This is a
-# real, known weakness, not hidden here -- weigh it before trusting the
-# other three windows' numbers as the typical case.
+# every other promotion in this project has followed). Numbers below are
+# POST-v40 (tightened stops, see above):
+#   2019-2024:          231.44% total /  22.13%/yr / -28.53% DD / Sortino 1.140 / Calmar 0.776
+#   2020-2022 crisis:     15.55% total /   5.76%/yr / -28.53% DD / Sortino 0.269 / Calmar 0.202
+#   2023-2026 crisis:    165.02% total /  31.17%/yr / -29.94% DD / Sortino 1.624 / Calmar 1.041
+#   last-12mo:             50.41% total /  50.62%/yr / -18.82% DD / Sortino 2.172 / Calmar 2.690
+# 2020-2022 went from essentially FLAT to a modest real gain under v40,
+# but it's still clearly the weakest of the four windows by every
+# metric, despite spanning both the COVID recovery bull run and the
+# 2022 crash -- consistent with what v22's own original header warned
+# about before this was ever tested through a real crash: daily-reset
+# 3x leverage compounds losses on the way down the same way it compounds
+# gains on the way up, plus volatility decay during any choppy/sideways
+# stretch. This is a real, known weakness, not hidden here -- weigh it
+# before trusting the other three windows' numbers as the typical case.
 #
 # VS SIMPLE BUY-AND-HOLD (SPY, same last-12mo window): SPY alone made
-# +21.99% with only -8.88% max drawdown (Calmar 2.48) -- this strategy's
-# +35.55%/-21.04% (Calmar 1.696) beats SPY on raw return but takes on
-# meaningfully more risk to get there. Beta/alpha vs SPY are now
-# computed automatically for every real (non-synthetic) backtest run
-# (see run_backtest.py) specifically so this comparison doesn't have to
-# be redone by hand each time -- check them before trusting a "beat the
-# benchmark" headline number.
+# +21.99% with only -8.88% max drawdown (Calmar 2.48). Pre-v40, this
+# strategy's Calmar (1.696) actually LOST to SPY's despite a higher raw
+# return -- under the goalposts above, SPY was the better system in that
+# window. Post-v40, this strategy's Calmar (2.690) now BEATS SPY's
+# (2.48) too, not just on raw return -- the first time this project has
+# cleared that bar. Beta/alpha vs SPY are computed automatically for
+# every real (non-synthetic) backtest run (see run_backtest.py)
+# specifically so this comparison doesn't have to be redone by hand each
+# time -- check them before trusting a "beat the benchmark" headline
+# number, especially in windows other than last-12mo (see the HONEST
+# WEAK SPOT table above -- 2020-2022's alpha is still negative).
 #
 # GITHUB ACTIONS SCHEDULE: switched back to equities market hours
 # (weekdays, after the 4pm ET close) -- see
 # .github/workflows/daily-trading-check.yml. Crypto's old 24/7,
 # every-day-of-the-week schedule does NOT apply to ETFs.
 #
-# Compare against the preserved crypto track:
+# Compare against the preserved crypto track, and the pre-v40 tuning:
 #   python run_backtest.py --config config/strategy_master_crypto_v36.yaml --chart --save --label "crypto-v36-compare"
+#   python run_backtest.py --config config/strategy_v40_tight_stops.yaml --chart --save --label "v40-compare"
 #   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
 #   python blend_backtest.py --chart   # ETF/crypto blend explored before this pivot, kept for reference
 #
@@ -122,7 +175,7 @@ risk:
   sizing_method: atr_unit
   atr_period: 20
   risk_pct_per_unit: 1.0
-  stop_atr_multiple: 2.0
+  stop_atr_multiple: 1.5
   max_position_pct: 35.0
   max_invested_pct: 80.0
   pyramiding:
@@ -131,7 +184,7 @@ risk:
     max_units: 4
   trailing_stop:
     enabled: true
-    atr_multiple: 2.0
+    atr_multiple: 1.0
 
 backtest:
   starting_cash: 10000

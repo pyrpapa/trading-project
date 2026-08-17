@@ -1,8 +1,8 @@
-# master_strategy.yaml (now the ETF strategy), windowed to the trailing
-# 12 months instead of the standard 2019-2024 backtest window.
-#
-#   python run_backtest.py --config config/strategy_master_last_12mo.yaml --chart --save --label "master-last-12mo"
-#
+# v39 -- same as v38 (add GLD) but GLD capped at 10% max_position_pct
+# (vs the shared 35%), testing whether reining in gold's oversized
+# ATR-driven position size recovers the losses seen in the
+# 2019-2024/2020-2022 windows without giving up the gains seen in
+# 2023-2026/last-12mo.
 watchlist:
 - SPXL
 - TQQQ
@@ -10,6 +10,7 @@ watchlist:
 - FAS
 - TNA
 - TECL
+- GLD
 entry:
   ma_period: 20
   volume_confirmation: true
@@ -24,7 +25,7 @@ risk:
   sizing_method: atr_unit
   atr_period: 20
   risk_pct_per_unit: 1.0
-  stop_atr_multiple: 1.5
+  stop_atr_multiple: 2.0
   max_position_pct: 35.0
   max_invested_pct: 80.0
   pyramiding:
@@ -33,9 +34,12 @@ risk:
     max_units: 4
   trailing_stop:
     enabled: true
-    atr_multiple: 1.0
+    atr_multiple: 2.0
+  ticker_overrides:
+    GLD:
+      max_position_pct: 10.0
 backtest:
   starting_cash: 10000
-  start_date: '2025-08-15'
-  end_date: '2026-08-15'
+  start_date: '2019-01-01'
+  end_date: '2024-12-31'
   commission_pct: 0.0

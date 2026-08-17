@@ -62,6 +62,28 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
     max_invested_pct = cfg["risk"]["max_invested_pct"] / 100
     sizing_method = cfg["risk"].get("sizing_method", "pct")  # "pct" (v1-v4) or "atr_unit" (Turtle-style)
 
+    # Per-ticker position-size override -- the shared ATR-based sizing
+    # formula (risk_pct_per_unit / (stop_atr_multiple * N) * price) gives
+    # BIGGER dollar positions to LOWER-volatility tickers, since it's
+    # solving for constant dollar RISK, not constant dollar SIZE. Mixing
+    # one calm asset (e.g. GLD) into a watchlist of much choppier ones
+    # (3x leveraged ETFs) means that calm asset's positions can end up
+    # 2-4x bigger, in dollars, than everything else -- confirmed directly
+    # on strategy_v38_add_gold.yaml (GLD's avg position ran $4,031 vs
+    # TQQQ's $1,775 in the 2019-2024 window), which both ties up an
+    # outsized share of capital in the lowest-conviction ticker AND
+    # crowds out room for the better-performing ones. This lets a config
+    # cap specific tickers below the shared max_position_pct ceiling,
+    # without touching the ATR math itself or affecting any other
+    # ticker. Falls back to the shared max_position_pct when a ticker
+    # has no override (or the block is absent) -- v1-v37 configs behave
+    # identically with zero changes.
+    ticker_overrides_cfg = cfg["risk"].get("ticker_overrides") or {}
+
+    def max_position_pct_for(ticker):
+        override = (ticker_overrides_cfg.get(ticker) or {}).get("max_position_pct")
+        return (override / 100) if override is not None else max_position_pct
+
     # Pyramiding (Turtle-style: add units to an already-open, winning
     # position as price moves further in its favor). Requires atr_unit
     # sizing since the add-trigger and the re-sizing of each new unit are
@@ -343,7 +365,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                     for pos in s
                 )
                 portfolio_value = cash + invested_value
-                max_position_value = portfolio_value * max_position_pct
+                max_position_value = portfolio_value * max_position_pct_for(ticker)
                 stack_value = sum(p.value(price) for p in stack)
                 room_in_position = max_position_value - stack_value
                 room_left = (portfolio_value * max_invested_pct) - invested_value
@@ -470,7 +492,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                     })
                     continue
 
-            max_position_value = portfolio_value * max_position_pct
+            max_position_value = portfolio_value * max_position_pct_for(ticker)
             room_left = (portfolio_value * max_invested_pct) - invested_value
             atr = sig_df.loc[date, "atr"] if "atr" in sig_df.columns else None
             sizing_note = None

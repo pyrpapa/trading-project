@@ -1,7 +1,5 @@
-# master_strategy.yaml (now the ETF strategy), windowed to the trailing
-# 12 months instead of the standard 2019-2024 backtest window.
-#
-#   python run_backtest.py --config config/strategy_master_last_12mo.yaml --chart --save --label "master-last-12mo"
+# master_strategy.yaml (ETF strategy), windowed to the 2020-2022 crisis
+# (COVID recovery bull run + the 2022 bear market).
 #
 watchlist:
 - SPXL
@@ -36,6 +34,6 @@ risk:
     atr_multiple: 1.0
 backtest:
   starting_cash: 10000
-  start_date: '2025-08-15'
-  end_date: '2026-08-15'
+  start_date: '2020-06-01'
+  end_date: '2022-12-31'
   commission_pct: 0.0

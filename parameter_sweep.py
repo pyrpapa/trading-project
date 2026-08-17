@@ -48,6 +48,7 @@ WINDOWS = {
     "2019-2024": ("2019-01-01", "2024-12-31"),
     "2020-2022-crisis": ("2020-06-01", "2022-12-31"),
     "2023-2026-crisis": ("2023-01-01", "2026-08-09"),
+    "last-12mo": ("2025-08-15", "2026-08-15"),
 }
 
 # Generous fixed warm-up so ONE fetch per window covers every parameter
@@ -75,11 +76,13 @@ PARAM_GRID = {
     "pyramiding_enabled": ("risk.pyramiding", "enabled", [True, False]),
     "pyramiding_unit_interval_n": ("risk.pyramiding", "unit_interval_n", [0.25, 0.5, 1.0]),
     "pyramiding_max_units": ("risk.pyramiding", "max_units", [2, 4, 6]),
+    "trailing_stop_atr_multiple": ("risk.trailing_stop", "atr_multiple", [1.0, 1.5, 2.0, 2.5, 3.0]),
 }
 
 METRIC_COLUMNS = [
     "total_return_pct", "annualized_return_pct", "max_drawdown_pct",
-    "sortino_ratio", "system_quality_number", "win_rate_pct", "n_trades",
+    "calmar_ratio", "sortino_ratio", "beta", "alpha_pct",
+    "system_quality_number", "win_rate_pct", "n_trades",
     "avg_r_multiple", "longest_losing_streak",
 ]
 
@@ -104,12 +107,12 @@ def fetcher_result_or_synthetic(data):
     return data
 
 
-def run_one(cfg: dict, price_data: dict, start: str, end: str) -> dict:
+def run_one(cfg: dict, price_data: dict, start: str, end: str, benchmark_returns=None) -> dict:
     cfg = copy.deepcopy(cfg)
     cfg["backtest"]["start_date"] = start
     cfg["backtest"]["end_date"] = end
     signals = {t: rules.generate_signals(df, cfg) for t, df in price_data.items()}
-    result = engine.run_backtest(price_data, signals, cfg)
+    result = engine.run_backtest(price_data, signals, cfg, benchmark_returns=benchmark_returns)
     return result["metrics"]
 
 
@@ -130,9 +133,21 @@ def main():
     print(f"Fetching price data for {len(WINDOWS)} window(s), {len(tickers)} tickers, "
           f"{WARMUP_DAYS}-day warm-up buffer each...")
     window_data = {}
+    window_benchmark = {}
     for window_name, (start, end) in WINDOWS.items():
         print(f"  {window_name}: {start} to {end}")
         window_data[window_name] = fetch_window_data(base_cfg, tickers, start, end, use_synthetic)
+        # SPY benchmark for metrics["beta"]/["alpha_pct"] -- see run_backtest.py
+        # for the same pattern. Skipped for synthetic data; fails open on
+        # any fetch error (beta/alpha just come back None for that window).
+        window_benchmark[window_name] = None
+        if not use_synthetic:
+            try:
+                fetch_start = (dt.date.fromisoformat(start) - dt.timedelta(days=WARMUP_DAYS)).isoformat()
+                spy_df = fetcher.fetch("SPY", fetch_start, end)
+                window_benchmark[window_name] = spy_df.loc[start:end, "Close"].pct_change().dropna()
+            except Exception as e:
+                print(f"    Note: SPY benchmark fetch failed for {window_name} ({e}) — beta/alpha will be None.")
 
     params_to_run = {
         name: spec for name, spec in PARAM_GRID.items()
@@ -147,7 +162,7 @@ def main():
             cfg = copy.deepcopy(base_cfg)
             set_nested(cfg, section, key, value)
             for window_name, (start, end) in WINDOWS.items():
-                metrics = run_one(cfg, window_data[window_name], start, end)
+                metrics = run_one(cfg, window_data[window_name], start, end, benchmark_returns=window_benchmark[window_name])
                 row = {
                     "parameter": param_name,
                     "value": value,
@@ -160,8 +175,9 @@ def main():
                 print(f"  {key}={value!r:>8} [{window_name:>16}]  "
                       f"return={row['total_return_pct']!s:>10}%  "
                       f"DD={row['max_drawdown_pct']!s:>8}%  "
+                      f"calmar={row['calmar_ratio']!s:>6}  "
                       f"sortino={row['sortino_ratio']!s:>6}  "
-                      f"sqn={row['system_quality_number']!s:>6}  "
+                      f"alpha={row['alpha_pct']!s:>7}  "
                       f"trades={row['n_trades']}")
 
         out_path = os.path.join(OUT_DIR, f"{param_name}.csv")

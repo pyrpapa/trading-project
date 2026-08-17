@@ -1,0 +1,56 @@
+# EXPERIMENTAL v38 -- master's current 6-ticker leveraged-ETF watchlist
+# (SPXL/TQQQ/SOXL/FAS/TNA/TECL) plus GLD (plain, unleveraged physical
+# gold), testing whether a genuinely different asset class helps the
+# strategy's documented weak spot: the 2020-2022 window is essentially
+# flat (Sortino -0.012) and every window carries a deep ~-33% drawdown.
+# Gold is chosen unleveraged deliberately -- the hypothesis is
+# diversification/hedging value (gold often moves opposite to equities
+# in a real selloff), not "more aggressive beta," which the other 6
+# tickers already provide plenty of. Same entry/exit/sizing/pyramiding/
+# trailing-stop settings as master, unchanged -- watchlist is the only
+# variable.
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v38_add_gold.yaml --chart --save --label "v38-add-gold"
+
+watchlist:
+  - SPXL
+  - TQQQ
+  - SOXL
+  - FAS
+  - TNA
+  - TECL
+  - GLD
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 2.0
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+  trailing_stop:
+    enabled: true
+    atr_multiple: 2.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

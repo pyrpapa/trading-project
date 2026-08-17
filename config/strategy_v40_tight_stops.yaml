@@ -1,0 +1,58 @@
+# v40 -- master with BOTH stop_atr_multiple (2.0 -> 1.5) and
+# trailing_stop.atr_multiple (2.0 -> 1.0) tightened, testing whether
+# combining two independently-validated wins compounds (like v10+v11's
+# pyramiding+Donchian-exit combo did) or just stacks/cancels.
+#
+# Both levers came out of a targeted parameter sweep (risk_pct_per_unit,
+# stop_atr_multiple, trailing_stop_atr_multiple, max_position_pct,
+# max_invested_pct) run 2026-08-17 against all 4 standard windows,
+# specifically checking Calmar/Sortino/alpha vs SPY (not just return),
+# per the newly-settled project goal: more risk than buy-and-hold is
+# only worth it if genuinely compensated risk-adjusted. Both tightened
+# stops improved return, drawdown, Calmar, Sortino, AND alpha vs SPY
+# simultaneously, in every one of the 4 windows individually -- not a
+# tradeoff of one for another.
+#
+#   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
+#   python run_backtest.py --config config/strategy_v40_tight_stops.yaml --chart --save --label "v40-tight-stops"
+
+watchlist:
+  - SPXL
+  - TQQQ
+  - SOXL
+  - FAS
+  - TNA
+  - TECL
+
+entry:
+  ma_period: 20
+  volume_confirmation: true
+  volume_ma_period: 20
+
+exit:
+  ma_exit: true
+  type: donchian_low
+  exit_breakout_period: 10
+  stop_loss_pct: 8.0
+  take_profit_pct: null
+
+risk:
+  sizing_method: atr_unit
+  atr_period: 20
+  risk_pct_per_unit: 1.0
+  stop_atr_multiple: 1.5
+  max_position_pct: 35.0
+  max_invested_pct: 80.0
+  pyramiding:
+    enabled: true
+    unit_interval_n: 0.5
+    max_units: 4
+  trailing_stop:
+    enabled: true
+    atr_multiple: 1.0
+
+backtest:
+  starting_cash: 10000
+  start_date: "2019-01-01"
+  end_date: "2024-12-31"
+  commission_pct: 0.0

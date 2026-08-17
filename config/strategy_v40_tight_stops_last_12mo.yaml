@@ -1,8 +1,5 @@
-# master_strategy.yaml (now the ETF strategy), windowed to the trailing
-# 12 months instead of the standard 2019-2024 backtest window.
-#
-#   python run_backtest.py --config config/strategy_master_last_12mo.yaml --chart --save --label "master-last-12mo"
-#
+# v40 (tight stops), windowed to last 12mo.
+#   python run_backtest.py --config config/strategy_v40_tight_stops_last_12mo.yaml --chart --save --label "v40-tight-stops-last_12mo"
 watchlist:
 - SPXL
 - TQQQ
