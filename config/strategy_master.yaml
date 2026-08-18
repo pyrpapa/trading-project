@@ -55,6 +55,41 @@
 # of master; revisit if a smarter (regime-aware, not just capped) gold
 # allocation is ever built.
 #
+# ERX (3x ENERGY) ADDED (2026-08-17): the one candidate, out of five
+# tested individually against the current 6-ticker watchlist (TMF 3x
+# bonds, ERX 3x energy, YINN 3x China, CURE 3x healthcare, DRN 3x real
+# estate -- all chosen specifically for having a genuinely DIFFERENT
+# driver than the existing tech/financials/small-cap tilt, not just
+# more leveraged equity beta), that showed a clean, broad win rather
+# than a mixed tradeoff:
+#   2019-2024:  231.44%/-28.53% DD/Calmar 0.776/alpha 10.04 -> 283.34%/-27.08% DD/Calmar 0.928/alpha 12.50
+#   2020-2022:   15.55%/-28.53% DD/Calmar 0.202/alpha -3.84 ->  60.53%/-21.91% DD/Calmar 0.920/alpha  9.92
+#   2023-2026:  165.02%/-29.94% DD/Calmar 1.041/alpha  7.49 -> 148.30%/-35.93% DD/Calmar 0.802/alpha  5.70
+#   last-12mo:   50.41%/-18.82% DD/Calmar 2.690/alpha 15.15 ->  64.05%/-13.80% DD/Calmar 4.662/alpha 33.60
+# Wins clearly in 3 of 4 windows, most notably 2020-2022 -- the
+# project's single most persistent weak spot all session -- where alpha
+# flips from -3.84 to +9.92 and Calmar more than quadruples (0.20 ->
+# 0.92), the biggest improvement any single change has made to that
+# window. Energy genuinely diversified against the tech-heavy basket
+# during exactly the stretch that's hurt this strategy most (COVID
+# recovery -> 2022, when oil/energy ran while tech-heavy leveraged ETFs
+# struggled). Costs something real in 2023-2026 (drawdown -29.94% ->
+# -35.93%, the one window where it's a genuine tradeoff, not a free
+# win) -- not hidden here, weigh it before assuming ERX is strictly
+# additive in every environment.
+#
+# TMF (3x bonds), the other candidate with a real theoretical
+# diversification story (stocks/bonds hedge), was explicitly REJECTED:
+# in 2020-2022 specifically it flipped a modest gain (+15.55%) into an
+# outright LOSS (-7.17%), with Calmar/Sortino/alpha all going negative
+# -- exactly the "2022 broke the classic stock/bond hedge" risk flagged
+# BEFORE testing (the Fed's rate-hike cycle hurt both stocks and bonds
+# together that year), confirmed rather than assumed. YINN (3x China)
+# and DRN (3x real estate) were mixed -- modest help in 2020-2022, real
+# costs in 2019-2024/last-12mo -- neither cleared a clean bar. CURE (3x
+# healthcare) was worse in literally every metric, every window, the
+# clearest reject of the five. None of the four folded in here.
+#
 # WHY THE PIVOT (2026-08-16): a deliberate reassessment, not a snap
 # decision -- crypto's backtested headline numbers (10,000%+ in the
 # best windows) turned out to be mostly BETA, not durable strategy
@@ -108,28 +143,27 @@
 # HONEST WEAK SPOT, validated across all four standard windows before
 # promoting (not just the target last-12mo window -- same discipline
 # every other promotion in this project has followed). Numbers below are
-# POST-v40 (tightened stops, see above):
-#   2019-2024:          231.44% total /  22.13%/yr / -28.53% DD / Sortino 1.140 / Calmar 0.776
-#   2020-2022 crisis:     15.55% total /   5.76%/yr / -28.53% DD / Sortino 0.269 / Calmar 0.202
-#   2023-2026 crisis:    165.02% total /  31.17%/yr / -29.94% DD / Sortino 1.624 / Calmar 1.041
-#   last-12mo:             50.41% total /  50.62%/yr / -18.82% DD / Sortino 2.172 / Calmar 2.690
-# 2020-2022 went from essentially FLAT to a modest real gain under v40,
-# but it's still clearly the weakest of the four windows by every
-# metric, despite spanning both the COVID recovery bull run and the
-# 2022 crash -- consistent with what v22's own original header warned
-# about before this was ever tested through a real crash: daily-reset
-# 3x leverage compounds losses on the way down the same way it compounds
-# gains on the way up, plus volatility decay during any choppy/sideways
-# stretch. This is a real, known weakness, not hidden here -- weigh it
-# before trusting the other three windows' numbers as the typical case.
+# POST-v40 + POST-ERX (see above):
+#   2019-2024:          283.34% total /  25.13%/yr / -27.08% DD / Sortino 1.248 / Calmar 0.928
+#   2020-2022 crisis:     60.53% total /  20.15%/yr / -21.91% DD / Sortino 0.903 / Calmar 0.920
+#   2023-2026 crisis:    148.30% total /  28.81%/yr / -35.93% DD / Sortino 1.533 / Calmar 0.802
+#   last-12mo:             64.05% total /  64.33%/yr / -13.80% DD / Sortino 3.033 / Calmar 4.662
+# 2020-2022 improved dramatically with ERX added (Calmar 0.20 -> 0.92,
+# alpha -3.84 -> +9.92, see above) but 2023-2026 is now the new relative
+# weak point instead (deepest drawdown of the four, -35.93%) -- adding
+# ERX didn't uniformly improve every window, it shifted WHERE the
+# weakness sits. Still consistent with what v22's own original header
+# warned about before this was ever tested through a real crash:
+# daily-reset 3x leverage compounds losses on the way down the same way
+# it compounds gains on the way up, plus volatility decay during any
+# choppy/sideways stretch. This is a real, known weakness, not hidden
+# here -- weigh it before trusting any one window's numbers as the
+# typical case.
 #
 # VS SIMPLE BUY-AND-HOLD (SPY, same last-12mo window): SPY alone made
-# +21.99% with only -8.88% max drawdown (Calmar 2.48). Pre-v40, this
-# strategy's Calmar (1.696) actually LOST to SPY's despite a higher raw
-# return -- under the goalposts above, SPY was the better system in that
-# window. Post-v40, this strategy's Calmar (2.690) now BEATS SPY's
-# (2.48) too, not just on raw return -- the first time this project has
-# cleared that bar. Beta/alpha vs SPY are computed automatically for
+# +21.99% with only -8.88% max drawdown (Calmar 2.48). This strategy's
+# Calmar is now 4.662 (post-v40+ERX) -- comfortably beats SPY's, not
+# just on raw return. Beta/alpha vs SPY are computed automatically for
 # every real (non-synthetic) backtest run (see run_backtest.py)
 # specifically so this comparison doesn't have to be redone by hand each
 # time -- check them before trusting a "beat the benchmark" headline
@@ -158,6 +192,7 @@ watchlist:
   - FAS
   - TNA
   - TECL
+  - ERX
 
 entry:
   ma_period: 20

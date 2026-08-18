@@ -8,6 +8,7 @@ watchlist:
 - FAS
 - TNA
 - TECL
+- ERX
 entry:
   ma_period: 20
   volume_confirmation: true
