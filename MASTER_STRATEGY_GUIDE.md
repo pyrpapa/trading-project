@@ -1,269 +1,220 @@
-# Master Strategy Guide
+# Master Leveraged-ETF Strategy — Complete Guide
 
-*Reference for `config/strategy_master.yaml`, the config that actually runs live. Written to be readable start to finish — no prior background assumed.*
+*Reference for `config/strategy_master.yaml`, the config that actually runs live. Rewritten 2026-08-18 — the system pivoted from crypto to leveraged ETFs since the last version of this guide; nothing below assumes crypto.*
 
 ---
 
 ## 1. The 30-second version
 
-We built a computer program that watches six 3x-leveraged ETFs every day and follows a fixed, mechanical rulebook — no human judgment, no gut calls, no "I have a feeling about this one." It only buys when two specific conditions line up at once, it knows exactly how much money to risk before it ever places a trade, and it has a predetermined exit plan for every single position before that position even opens. Right now it's running with fake money ("paper trading") on a real brokerage account, so we can watch it operate under real market conditions with zero actual financial risk, before ever deciding whether to trust it with real money.
+We built a computer program that watches seven 3x-leveraged ETFs every day and follows a fixed, mechanical rulebook — no human judgment, no gut calls. It only buys when specific conditions line up, it knows exactly how much money to risk before it ever places a trade, and it has a predetermined exit plan for every position before that position even opens.
 
-That's the whole idea. Everything below is how, specifically.
+Right now it's running with fake money ("paper trading") on a real brokerage account. The strategy itself has been through a long design phase — including a real pivot away from crypto once the numbers showed that edge was mostly just leverage, not skill — and is now considered locked in for a while: no more parameter tuning against the same backtested history, just watching how it performs on data it's never seen before.
 
 ---
 
 ## 2. The cheat sheet
 
-If you only remember one section, make it this one — everything else in this guide is this, expanded with real numbers.
+If you only read one section, make it this one.
 
-**BUY** — checked once a day, for each ticker we don't already own. Both must be true:
+**BUY** — checked once a day, per ticker not already held. Both must be true:
 1. Price just crossed above its 20-day average (short-term trend turned up)
 2. Today's volume is above normal (real interest, not noise)
 
-Both true → buy today. Either false → do nothing.
-
-**HOW MUCH TO BUY (risk sizing)** — decided fresh every trade, before anything else:
-1. Pick a risk budget: 1.0% of the total account, always.
-2. Look at how choppy the ticker has been lately (call this "N").
-3. Set the stop-loss 2×N below entry price.
+**HOW MUCH TO BUY** — decided fresh every trade:
+1. Risk budget: 1.0% of the total account, always.
+2. Measure how choppy the ticker's been lately (call it "N").
+3. Set the stop-loss 1.5×N below entry price.
 4. Buy exactly enough that *if* the stop-loss hits, the loss equals that 1.0% — no more, no less.
 
-A choppier ticker → smaller position. A calmer ticker → bigger position. The **dollar risk is always the same**; only the position size adjusts to get there.
+**SELL** — checked daily, three possible triggers:
+1. **Stop-loss** — price falls to the floor from step 3 → sell. Caps the loss.
+2. **Trailing stop** — once a position is profitable, the floor rises with it (1.0×N below the highest price seen) → locks in gains as a winner runs.
+3. **Trend exit** — price makes a new 10-day low → sell, the trend that justified buying is over.
+4. **Take-profit — off.** No "sell once up X%" rule. Winners run uncapped until #2 or #3 fires.
 
-**SELL** — checked every day a position is open, multiple possible triggers, only one applies per trade:
-1. **Stop-loss (fixed)** — price falls to the floor calculated at entry → sell immediately. Caps the loss.
-2. **Stop-loss (trailing)** — as the position climbs, this floor gets pulled up behind it (see Section 7) — so a winning position that reverses hard can still exit via "stop_loss," just at a much higher, profit-locking price, not the original entry-based floor.
-3. **Trend exit** — price makes a new 10-day low → sell. The trend that justified buying is over.
-4. **Take-profit — turned off.** No "sell once up X%" rule exists. Winners run until #2 or #3 happens, with no ceiling.
+**PYRAMID** — for a position already open and winning: every time price climbs another half-N above the last unit's own entry, buy more of that ticker (up to 4 units total), each freshly risk-sized. The whole stack shares one trailing stop and sells together, all at once.
 
-Whichever trigger fires *first* is what actually closes the trade.
-
-**PYRAMID** — only for a position already open and winning:
-- If price climbs another half-N above where the last unit was bought, buy *more* of that same ticker (up to 4 total units), each sized fresh with the same 1.0%-risk math.
-- When it's time to sell, **everything sells together, all at once** — not one unit at a time.
-
-**THE RATING METRICS** — how we score whether any of this is working. There isn't one single number anymore — see Section 13 for the full set (CAGR, drawdown, Sortino, Calmar, Profit Factor, Beta/Alpha vs. the S&P 500, and more), each answering a different question about the same result.
+**THE RATING METRICS** — not "did it make money," but "did it make money *worth the risk taken*":
+- **Calmar ratio** = annualized return ÷ worst drawdown. How much return per unit of worst-case pain.
+- **Sortino ratio** = annualized return ÷ typical "bad day" severity. Only counts downside, never punishes a big win.
+- **Alpha vs. SPY** = how much return is left over after accounting for how much extra market risk (beta) this strategy is carrying, compared to simply owning SPY. The real test of "is this actually worth the extra risk."
 
 ---
 
 ## 3. What kind of system this actually is
 
-**Mechanical, not discretionary.** A human isn't looking at charts and deciding "this feels like a good time to buy." The computer checks a fixed set of numeric conditions every day, and if they're true, it acts — identically, whether it's a Tuesday or a holiday, whether the news is exciting or boring, whether "it" (the program) is nervous or confident, because it's neither.
+**Mechanical, not discretionary.** A human isn't looking at charts and deciding "this feels right." The computer checks a fixed set of numeric conditions every day and acts identically regardless of mood, headlines, or how yesterday went.
 
-**Tested before trusted.** Every rule in this system was checked against years of *real historical prices* first — replaying 2019 through today and asking "if these exact rules had been running the whole time, what would have happened?" That's called **backtesting**, and it's how every number you'll see below was arrived at before a single real (or fake) dollar was ever risked.
+**Tested before trusted.** Every rule was checked against years of real historical prices before ever running for real — replaying history and asking "if these exact rules had been running, what would have happened?" That's backtesting.
 
-**One file controls everything.** The entire behavior of the live system is controlled by a single file: `config/strategy_master.yaml`. Change a number in that file — how much to risk per trade, which tickers to watch, how tight the stop-loss is — and the system's behavior changes. No programming required for most adjustments. This guide walks through exactly what's in that file today.
+**One file controls everything.** The entire live system is `config/strategy_master.yaml`. Change a number in it and behavior changes — no programming required for most adjustments.
+
+**Currently in a "watch, don't tune" phase.** After a long design process (see Section 4), the current config represents the durable, well-evidenced findings from that process — not every idea tried. Going forward, the plan is to let real paper results accumulate for months before making further changes, rather than continuing to search the same historical windows for marginal improvements. That's a deliberate methodology choice, not inactivity — see Section 12.
 
 ---
 
-## 4. The watchlist — what it trades, and why the pivot
+## 4. The watchlist, and how it got here
 
-**Currently:** SPXL (3x S&P 500), TQQQ (3x Nasdaq-100), SOXL (3x semiconductors), FAS (3x financials), TNA (3x small-caps), TECL (3x technology) — all 3x leveraged ETFs.
+**Currently:** SPXL, TQQQ, SOXL, FAS, TNA, TECL, ERX — all ~3x daily-leveraged ETFs (S&P 500, Nasdaq-100, semiconductors, financials, small-caps, technology, and energy respectively).
 
-**This wasn't always the strategy.** For most of this project's history, the live config traded six cryptocurrencies (BTC, ETH, SOL, XRP, LINK, RENDER) instead — that track is fully preserved, untouched, at `config/strategy_master_crypto_v36.yaml`, in case it's ever revisited as its own separate, deliberately smaller allocation. Here's why the primary strategy moved off crypto:
+**This started as crypto, and the pivot away from it is the single most important finding of the whole design process.** Crypto's backtested headline numbers looked spectacular (10,000%+ in the best windows) — but under closer inspection, that turned out to be mostly *beta* (just being exposed to a huge bull run) rather than durable strategy *skill*. Every defensive lever tried on crypto (trailing stops, tighter position caps, a rotation overlay, a choppiness filter) bought safety by giving up return, and crypto genuinely lost money over its most recent 12-month stretch with nothing found that fixed that without also gutting the windows that worked. Leveraged ETFs, tested the same rigorous way, showed real, mechanism-backed edge instead — see Section 12 for the actual numbers.
 
-**Crypto's backtested numbers were mostly a historic bull market, not durable skill.** The multi-year backtests showed extraordinary returns (13,000%+ in the best windows), but every risk-reducing improvement tried — a trailing stop, tighter position limits, blending with equities — bought safety by giving up return, and the *size* of that trade (roughly an 80% haircut in the most protective version) revealed the underlying edge was much thinner than the headline number implied. The real test: checked against the most recent 12 months specifically (rather than only the multi-year windows that happened to contain a historic bull run), crypto **lost money** — a genuine, real loss, not just underperformance — and nothing tried fixed that without also gutting the years that worked.
-
-**Leveraged ETFs, tested on that exact same recent window, made real, healthy money.** +35.55% return, and — just as importantly — the *quality* of the trades looked completely different: 29 genuine trend-exits versus only 16 stop-losses, compared to crypto's 32-of-33 stop-loss pattern in the same stretch. That's the signature of the entry/exit machinery actually working as designed (catching real trends), not fighting constant whipsaw.
-
-**The watchlist was deliberately widened from an initial 3 tickers to 6.** The 3-ticker version (SPXL/TQQQ/SOXL) actually had a *higher* raw return on that recent window — but almost the entire gain came from one single ticker (SOXL), a fragile, single-name-dependent result. Adding FAS/TNA/TECL without the trailing stop made things *worse* (classic ticker dilution, the same lesson this project has hit before) — but WITH the trailing stop, the wider list produced the best risk-adjusted result of anything tested. Diversification only paid off once there was a mechanism to actually protect the gains it was diversifying.
-
-**One honest, real weak spot, found by testing rather than assumed away:** across 2020-2022 — a window spanning both the COVID recovery bull run *and* the 2022 crash — this strategy is essentially flat (near-zero return, near-zero Sortino). 3x daily-reset leverage compounds losses on the way down the same way it compounds gains on the way up, and this is the first time that risk has actually been tested against a real crash rather than just assumed. Not disqualifying, but real, and worth knowing before trusting the other three tested windows as the typical case.
+**The watchlist itself was widened deliberately, not just for its own sake:**
+- Started at 3 tickers (SPXL/TQQQ/SOXL), widened to 6 (+FAS/TNA/TECL) — tested *without* a trailing stop first and it was a clear loss (ticker dilution, same lesson learned repeatedly this whole project). Only *with* the trailing stop does the wider basket pay off, and even then the 3-ticker version's return was dangerously concentrated in one ticker (SOXL, nearly the entire gain) — the 6-ticker version is a genuine diversification improvement, not just more names.
+- **ERX (3x energy) was added after testing 5 candidates individually** — TMF (3x bonds), YINN (3x China), CURE (3x healthcare), DRN (3x real estate), all chosen specifically for having a genuinely *different* driver than the tech-heavy core. ERX was the only clean win: it improved 3 of 4 standard test windows, most dramatically the strategy's persistently weakest window, because energy genuinely moves differently from leveraged tech during a downturn. TMF was rejected after flipping a modest gain into an outright loss in that exact window — the classic "2022 broke the stock/bond hedge" risk, confirmed rather than assumed. CURE was worse on literally every metric tested. **Honest cost**: adding ERX didn't uniformly improve everything — it shifted the strategy's weakest window from 2020-2022 to 2023-2026 instead, which now has the deepest drawdown of the four.
+- A plain gold (GLD) addition was also tested and rejected — it helped recent history but hurt older windows, traced to a real mechanism: gold's low volatility means the position-sizing math gives it an outsized dollar position relative to the leveraged tickers, unless specifically capped.
 
 ---
 
 ## 5. How it decides to BUY
 
-Two conditions, from `entry:` in the config, **both have to be true on the same day**:
+Two conditions from `entry:`, both true the same day:
 
 | Rule | Config value | Plain meaning |
 |---|---|---|
-| Moving-average crossover | `ma_period: 20` | Price just crossed *above* its own 20-day average — "the short-term trend just turned up" |
-| Volume confirmation | `volume_confirmation: true` | Today's trading volume is above its own 20-day average — real buying interest, not a quiet, meaningless wiggle |
+| MA crossover | `ma_period: 20` | Price just crossed above its 20-day average |
+| Volume confirmation | `volume_confirmation: true` | Today's volume is above its 20-day average |
 
-**Note for anyone who remembers the old crypto version:** there used to be a third condition, a 150-day "regime filter" requiring the longer-term trend to agree too. It was tested directly on this asset class and it *hurt* — return dropped and Sortino got worse — so it's deliberately not part of this config. A lever that helped crypto isn't assumed to help everything; each one gets checked on its own.
+### Real example — TECL, spring 2026
 
-### Real example: an SPXL trade, 2025-08-19
+TECL's entry rule fired on 2026-04-30 at $146.13, and again on 2026-05-07 at $174.69 (a pyramid add — see Section 8). Both conditions were genuinely true both days: price had just crossed its 20-day average, and volume confirmed real buying interest, not noise.
 
-Price crossed above its 20-day moving average with volume confirming, and the system bought its first unit at **$188.00**.
+**A finding worth knowing**: TECL's entry rule actually fired *correctly* six more times in the following weeks (5/8, 5/12, 5/18, 5/29, 6/1, 6/2) — but none of those were acted on, because the portfolio was pinned at its 80% capital ceiling from other tickers (SPXL, SOXL, TQQQ) riding the same rally simultaneously. The signal logic wasn't the problem; there was simply no capital left to deploy. This is a real, documented gap — see Section 10.
 
 ---
 
 ## 6. How much it buys — position sizing
 
-The system doesn't buy a flat dollar amount every time. It sizes each trade so that **if the trade goes wrong and hits its stop-loss, the loss costs a fixed, small slice of the total account** — regardless of how volatile that particular ticker happens to be. This is the "N-based" or "Turtle-style" method, from `risk:` in the config:
+Every trade is sized so that **if it hits its stop-loss, the loss costs a fixed, small slice of the account** — regardless of how volatile that particular ticker is. From `risk:`:
 
 ```
-risk_pct_per_unit: 1.0      →  risk 1.0% of total account equity per trade
-stop_atr_multiple: 2.0      →  stop-loss set 2× a volatility measure (N) away from entry
+risk_pct_per_unit: 1.0       →  risk 1.0% of total account equity per trade
+stop_atr_multiple: 1.5       →  stop-loss set 1.5× a volatility measure (N) from entry
 ```
 
-**"N" (also called ATR)** is just a rolling measure of how much a ticker typically moves in a day. A choppier ticker has a bigger N, which — by design — means the system automatically buys *fewer* shares of it, so the dollar risk stays the same either way. (Section 12 has the full mechanical breakdown of how N is calculated, if you want the exact formula.)
+**"N" (ATR)** is a rolling measure of a ticker's typical daily move. A choppier ticker has a bigger N, so the system automatically buys fewer shares of it — the dollar risk stays the same either way.
 
-### Real example, continued
+### Real example, continued (TECL)
 
-- Entry price: $188.00
-- Risk budget: 1.0% of account equity
-- Risk per share: 2.0 × N (that day's ATR for SPXL)
-- Position size = risk budget ÷ risk-per-share × price, capped by two ceilings below
-
-Two safety ceilings also apply on top of this math, regardless of what the formula above says: no single position can exceed **35%** of the account (`max_position_pct`), and total money invested across everything can't exceed **80%** of the account (`max_invested_pct`) — so at least 20% always stays in cash.
+- Entry price: $146.13, then $174.69 on the pyramid add
+- Two ceilings apply on top regardless: no single position over **35%** of the account (`max_position_pct`), total invested never over **80%** (`max_invested_pct`)
 
 ---
 
-## 7. How it decides to SELL — the ways out
+## 7. How it decides to SELL — and what actually happens when it does
 
-From `exit:` and `risk.trailing_stop` in the config, checked every day a position is open:
+From `exit:`, checked every day a position is open. Two real trades from spring/summer 2026 tell both sides of this honestly.
 
-1. **Fixed stop-loss** — the level calculated at entry. Never moves down, only ever gets replaced by something *higher* (see #2 and pyramiding).
-2. **Trailing stop (new since the crypto era)** — `trailing_stop.enabled: true, atr_multiple: 2.0`. Every day, the system tracks the highest price the position has reached since entry, and pulls the stop up to (that peak − 2×N), if that's higher than the current stop. This exists specifically to catch a real gap in the older system: a sharp spike that reverses fast could round-trip almost entirely — neither the fixed stop nor the 10-day trend exit was fast enough to protect any of the gain. Now, a position that spiked and is giving it back exits at a *locked-in profit level*, not back at the original entry-based floor. **This is why some "stop_loss" exits in the trade log are actually wins** — the SPXL trade from Section 5 exited via `stop_loss` on 2025-10-10 at $197.60, up from its $188.00 entry, because the trailing stop had already climbed well above the original floor by the time it triggered.
-3. **Trend exit** — price closes below its own 10-day low (`exit_breakout_period: 10`, a "Donchian" exit). The normal, healthy way most trades end when the trend itself genuinely breaks down, distinct from either stop-loss trigger.
-4. **Take-profit — deliberately switched off** (`take_profit_pct: null`). There is no price target that automatically locks in a gain. This is on purpose: the philosophy is "cut losses short, let winners run as far as they'll go," rather than capping upside artificially. (Testing a take-profit directly confirmed this — even a fairly generous one cut total returns by more than half.)
+### The win: TECL, April–May 2026
 
-### Real trade, start to finish (SPXL, 2025-08-19 to 2025-10-10)
+Bought at $146.13 and $174.69, the whole position exited together on 2026-05-12 at **$191.51** — **+31.05% and +9.63%** on the two units. The trailing stop did exactly its job: it locked in a large gain right before a sharp pullback that followed.
 
-- **8/19**: Entry, unit 1, $188.00.
-- **8/22**: Price climbed enough to trigger a pyramid add — unit 2 bought at $192.36 (see Section 8).
-- Along the way, the trailing stop climbed with the price, replacing the original fixed floor.
-- **10/10**: Price reversed enough to hit the (by-then much higher) trailing stop. Both units closed together: unit 1 exited at +1.03R ($102.03 profit), unit 2 at +0.51R ($40.98 profit).
+**A chart-reading note worth remembering**: on the price charts this project generates, a red "sell" marker means *a sell happened here* — it does not mean the trade lost money. This exact trade's sell marker sits well above both buy markers, because it was a big win, not a loss. Don't assume red = bad without checking the actual trade log.
+
+### The loss: TQQQ, June 2026 — and how fast it happened
+
+A 3-unit pyramid stack (entries at $75.17, $81.76, $83.49) was riding a real rally, up as much as 2.6R on the oldest unit by 2026-06-02. Then: **on 2026-06-3 the stock was still 3.3% above its trailing stop; by 6/4, still 1.6% above it — there was no visible weakness on either day.** Then it gapped down overnight and crashed intraday, closing 2026-06-05 at $72.88, well below the stop level. All three units exited that day: **-3.04%, -10.86%, -12.70%.**
+
+The honest lesson: this wasn't the exit logic being slow. There was no signal to catch on 6/3 or 6/4 — the reversal was a genuine one-day violent move that jumped straight through the stop's buffer rather than grinding into it. The mechanism that *would* help here is one this project doesn't have yet: a live, resting stop-loss order at the broker, rather than a check that only happens once a day. See Section 10.
+
+**A specific fix that was tested and rejected for this exact case**: uniformly tightening the trailing stop (to catch reversals like this sooner) was tested across all four historical windows and made results *worse* almost everywhere — it chops up far more ordinary trades than it saves from rare violent moves like this one. A narrower, profit-conditional version ("exit immediately on 2 down days once meaningfully profitable") was also built and tested — it fixed this exact TQQQ trade dramatically, but had almost no net effect once measured across everything else it also touched. Neither is currently active.
 
 ---
 
 ## 8. Pyramiding — growing a winning position
 
-From `risk.pyramiding` in the config:
-
 ```
 enabled: true
-unit_interval_n: 0.5    →  add another unit every 0.5×N the price moves further in our favor
+unit_interval_n: 0.5    →  add a unit every 0.5×N further in our favor
 max_units: 4             →  cap the stack at 4 total units
 ```
 
-Every time price rises by half of the current volatility measure above the *last* unit's own entry price, the system adds another position — up to 4 total — each one independently risk-sized the same way as the original entry. In the SPXL example above, the second unit triggered at $192.36, a genuine 0.5N move above the $188.00 entry.
+A trade already proving itself right earns a bigger bet. When it's time to sell, the whole stack sells together — never partial exits.
 
-The logic: a trade that's already proving itself right earns a bigger bet, rather than every trade getting exactly the same size regardless of how well it's working. When any unit sells, the *whole stack* sells together, at once — not partial exits.
-
----
-
-## 9. The machinery — what actually runs, and when
-
-- **Alpaca** — the brokerage. The account is currently a **paper account**: real market prices, real order mechanics, fake money. Same code would place real trades on a real account if that switch were ever deliberately flipped (there's a hard safeguard in the code specifically preventing this from happening by accident).
-- **Supabase** — the database. Every signal, trade, and account snapshot gets logged here — this is the system's permanent record, and what feeds the results dashboard.
-- **GitHub Actions** — the automatic trigger. Runs once a day, **weekdays only, at 20:30 UTC** (4:30pm ET), thirty minutes after the stock market closes. This changed from the crypto era's 24/7, every-day schedule specifically because ETFs only trade during market hours, Monday through Friday — if the config ever switches back to `strategy_master_crypto_v36.yaml`, this schedule needs to switch back too (see that file's own header).
-- **Manual runs** (`python live/run_live.py`) — can be run any time. Running it more often *won't* generate new buy/sell trend signals faster — those are locked to once a day, on purpose, since the whole strategy is built around daily-bar trends, not minute-by-minute noise. What extra runs *do* usefully catch sooner is a stop-loss breach (fixed or trailing) or a pyramid-add opportunity, since those specific checks use a live price, not the daily bar.
+**A real risk this surfaces**: the later, higher-priced units in a stack are consistently the most exposed to a sharp reversal, since they have the least room before the shared stop. TQQQ's worst-performing unit (-12.70%) was the third pyramid add, bought closest to the eventual top. Capping the stack at fewer units (tested at 2 instead of 4) removes this specific risk and improved 3 of 4 test windows — a real, evidence-backed candidate for a future change, not yet promoted.
 
 ---
 
-## 10. Where the backtest data actually comes from
+## 9. The machinery — what runs, and when
 
-Algo traders are right to care about this — bad or subtly-wrong historical data can make a strategy look great (or terrible) for reasons that have nothing to do with the strategy itself. Here's exactly what this project does, and where the real limitations are.
-
-**Source: `yfinance`, a free library that pulls from Yahoo Finance.** No paid data subscription, no API key. `data/fetcher.py` calls it directly and returns Open/High/Low/Close/Volume for whatever ticker and date range is requested.
-
-**Prices are automatically split- and dividend-adjusted.** This matters more than it sounds like. A stock that does a 10-for-1 split (NVDA did exactly this in June 2024) would otherwise show up in the raw data as a fake ~90% overnight "crash" — the price genuinely drops that much on paper, even though nothing happened to the actual value of anyone's holdings. Checked this directly against NVDA's real June 2024 split date: the adjusted price data flows smoothly through the split with no artificial cliff, confirming the adjustment is actually working, not just assumed. Dividend adjustment matters too, for a different reason — without it, a backtest would understate real returns, since a real investor holding a dividend-paying position earns that cash on top of the price movement.
-
-**Caching**, in `data/cache/`: once a ticker/date-range combination is fetched, it's saved to a local CSV so repeated backtests don't keep re-downloading the same data, and so testing can continue offline once the cache is populated. The cache is smart enough to detect when a request needs a *wider* date range than what's cached and automatically refetches rather than silently returning an incomplete slice.
-
-**A real, found-and-fixed limitation: this free pipeline had a genuine data gap.** While testing the ETF strategy, one ticker (FAS) was missing two trading days in its cached data — not a corporate action or a real market event, just a hiccup somewhere between Yahoo's servers and the local cache. The backtest engine's handling of that gap was *also* wrong (see Section 11) — it valued the open position at $0 for those two days instead of carrying forward its last known price, creating a fake ~40% one-day portfolio crash that "recovered" the moment data resumed. Both the data gap and the engine's mishandling of it are now understood and the engine side is fixed — but it's a live reminder that a free, unofficial data source can and does have real gaps, something a paid institutional data feed is less prone to.
-
-**What's NOT modeled, honestly:**
-- **No bid-ask spread or slippage.** Every backtest assumes a trade fills exactly at the day's closing price, which is never quite true in real trading — a real fill will be some amount worse, especially on a fast-moving day. `commission_pct` exists in every config and currently defaults to 0.
-- **Survivorship bias risk, in principle.** Yahoo Finance serves data for currently-listed tickers — a ticker that existed historically but was later delisted or merged away generally isn't testable this way. Less of a concern for large, established ETFs like the current watchlist than it would be for, say, small individual stocks, but worth knowing as a general limitation of this data source.
-- **Point-in-time reproducibility.** Because adjustments are applied retroactively, the exact "Close" value for a historical date can shift slightly if a new split or dividend happens *after* that date but before you re-fetch — this is the CORRECT behavior for accurate historical returns, but it does mean re-running the exact same backtest at two different points in time isn't guaranteed to produce byte-identical cached data, only the same effective returns.
+- **Alpaca** — the brokerage. Currently a **paper account**: real prices, real order mechanics, fake money.
+- **Supabase** — the database. Every signal, trade, and account snapshot is logged here.
+- **GitHub Actions** — the automatic trigger, **weekdays at 20:30 UTC** (4:30pm ET, 30 minutes after market close) — back to equities market hours since the crypto pivot. *DST caveat*: this is a fixed UTC time, but market close is fixed in ET, and the gap between them shifts twice a year — once daylight saving ends (~early November), 20:30 UTC becomes 3:30pm ET, a half hour *before* the close instead of after. Worth revisiting the cron expression before that happens.
+- **Manual runs** — can run any time; won't generate new trend signals faster (locked to daily, on purpose), but will catch a stop-loss breach sooner if run more often, since price checks use a live quote.
 
 ---
 
-## 11. Bugs found and fixed — what's solid now
+## 10. What's not resolved yet — honest open risks
 
-Real problems, caught and closed out:
+- **No standing stop-loss order.** The stop is only checked when the program runs, once a day. TQQQ's June crash (Section 7) is a real, concrete example of what this costs: a violent overnight/intraday move can blow straight through the stop's buffer before it's ever checked.
+- **A real capital-competition gap.** TECL's six missed entries (Section 5) show that when multiple tickers signal at once, the ones checked later in the day can lose out on capital entirely, even with a perfectly correct signal — the 80% investment cap is measured in *dollars*, not *risk*, so it can't tell a well-protected position from a loosely-stopped one when deciding what has "room." A risk-based capital cap (sometimes called portfolio heat, a concept straight from the Turtle trading rules this whole system is modeled on) would fix this directly; not built yet.
+- **A real "chop tax."** A genuinely flat, sideways market (Nov 2025–Jan 2026, in earlier testing) produced dozens of small stop-losses with almost no net gain — the unavoidable cost of a trend-following system when there's no trend to follow. A purpose-built filter for this was tested and rejected; it blocked too many good trades along with the bad ones.
+- **Overfitting risk from the design process itself.** A long list of parameters (both stop multiples, watchlist composition, entry period, pyramid caps, risk-per-unit, and more) were all tuned against the *same* four historical windows, repeatedly. The big, clean wins (tightened stops, ERX) are trustworthy — they were large, consistent across every window, and had a real causal story. The smaller, more marginal experiments were deliberately *not* promoted into this config, specifically to avoid over-fitting to that fixed history. See Section 12.
+- **The live track record is essentially empty.** As of this writing, the current watchlist has had zero real trades — the pivot to leveraged ETFs happened on a weekend, and no scheduled weekday run had fired yet by the time this was written. Nothing about real forward performance can be said until that changes.
+- **2020-2022 and 2023-2026 remain real weak points.** Even after every improvement found this session, 2020-2022 is still the weakest of the four standard test windows, and 2023-2026 (after ERX) now carries the deepest drawdown of the four (-35.93%).
 
-- **Pyramiding silently never ran live.** Every backtest assumed positions could grow via pyramiding, but the actual live/paper code had no implementation of it at all — fixed before real trading started.
-- **Crypto ticker symbol mismatches** (three different formats for the same coin across the data source, the broker's order API, and the broker's positions API) — caught and fixed. Not relevant to the current ETF watchlist (equity tickers don't have this problem), but the fix stayed in place for if crypto is ever reactivated.
-- **Stop-loss checks were using stale pricing.** The daily price data source sometimes lagged behind "now" — fixed by pulling a live quote from the broker specifically for stop-loss and pyramid-add checks (the buy/sell trend *signal* itself still correctly uses the daily bar, unchanged).
-- **A silent mark-to-market bug in the backtest engine itself.** If a ticker's price data had a gap on a day it had an open position (found via a stale data cache, though the same class of bug could be triggered by any real data gap), the position was valued at $0 for that day instead of its last known price — creating a fake, dramatic drawdown that "recovered" the instant data resumed. Found while investigating an anomalous test result, fixed at the source in `backtest/engine.py`, and confirmed it doesn't change any of the multi-window numbers this guide reports (the corrupted case wasn't the worst point in any of those particular runs) — but it protects every future backtest from the same failure mode.
-- **The trailing stop and the live stop-price reconstruction were built and validated together**, not backtest-only — `live/run_live.py` has its own separate, stateless stop-price logic (it has to reconstruct the stop fresh each run from trade records, since there's no persistent memory between daily runs), and it would have silently missed the trailing stop entirely if it hadn't been explicitly ported there too.
-
----
-
-## 12. What's NOT resolved yet — honest open risks
-
-- **No standing stop-loss order.** The stop (fixed or trailing) is only checked when the program runs. A missed automatic run combined with a sharp price move is a real, currently-unprotected gap.
-- **Leverage risk through a real crash is now tested, and the result is a genuine yellow flag.** The 2020-2022 window (COVID rally + the 2022 crash) came back essentially flat — not a loss, but not the strength the other three windows showed either. 3x daily-reset leverage compounds badly in exactly this kind of environment, and this is real evidence of that, not just a theoretical concern anymore.
-- **Even the strongest window doesn't clearly beat simple buy-and-hold on a risk-adjusted basis.** On the same recent-12-months window, plain S&P 500 buy-and-hold (SPY) made +21.99% with only -8.88% max drawdown — a much better return-per-unit-of-risk than this strategy's own +35.55%/-21.04% in that same stretch. Beating a benchmark's raw return isn't the same as adding real value beyond just being exposed to a rising market — see Section 13's Beta/Alpha explanation for how to check this directly on any given result.
-- **Backtested returns lean on a handful of outlier trades**, not a smooth, evenly-distributed edge, same caveat as ever — treat headline return numbers as "what happened when a few big trades landed," not a typical-year expectation.
-- **The live track record is effectively brand new** under this ETF configuration — almost all real-world confidence built up under the old crypto config doesn't carry over, since this is a materially different strategy now.
-
-None of this means the system is broken — it means the honest state is "meaningfully better-tested than the crypto version was, with at least one real, newly-confirmed weakness," not "proven, no caveats."
+None of this means the system is broken. It means: the plumbing works, the biggest known issues are documented rather than hidden, and what's genuinely unproven is whether any of this holds up on markets it hasn't seen yet — which is exactly what the current "watch, don't tune" phase exists to find out.
 
 ---
 
-## 13. How we judge "is this actually good" — every metric, plainly
+## 11. How we judge "is this actually good"
 
-There isn't one headline number anymore. Each metric below answers a genuinely different question, and a strategy can look great on one and mediocre on another — that's the point of tracking all of them, not picking a favorite.
+The old crypto-era version of this guide leaned heavily on the System Quality Number (SQN). For leveraged ETFs, three different metrics do more of the real work:
 
-| Metric | What it actually measures | How to read it |
-|---|---|---|
-| **Total Return %** | Total gain/loss over the whole tested period, as a percentage of starting money. | Bigger is better, but says nothing about *how bumpy* the ride was to get there. |
-| **CAGR** (Compound Annual Growth Rate) | The steady year-over-year growth rate that would produce the same total return — "if this grew at the same % every single year, what would that rate be?" | Lets you compare a 6-month test and a 6-year test on equal footing. This is what the old guide called "Annualized." |
-| **Max Drawdown** | The single worst peak-to-trough decline anywhere in the test — "at the worst possible moment, how far underwater would you have been?" | A bigger (more negative) number means a rougher psychological and financial ride, even if the strategy ultimately made money. |
-| **Ulcer Index** | Like max drawdown, but accounts for *how long* you stayed underwater too, not just the single worst instant. A strategy that grinds sideways-down for months scores worse here than one with the same max drawdown that snaps back quickly. | Lower is better. Genuinely different information from max drawdown alone. |
-| **Win Rate** | What % of closed trades made money. | Sounds important, but a strategy built to "cut losses short, let winners run" can have a win rate *under 50%* and still be very profitable — a few big wins can outweigh many small losses. Don't judge a strategy by this number alone. |
-| **Trades** | How many positions were opened and closed. | Context, not a verdict — more trades isn't automatically better or worse. |
-| **Avg R-multiple** | Every trade's profit or loss expressed as a multiple of what was originally risked on it — "+2R" means a trade made twice what was risked; "-1R" means it lost exactly the planned amount. This average is across every closed trade. | The core "edge per bet" number this whole system is built around, straight from *Way of the Turtle*'s own playbook. |
-| **Profit Factor** | Total dollars won ÷ total dollars lost (both as positive numbers) — "for every dollar lost, how many dollars were won?" | Above 1 means profitable overall; above 2 is generally considered strong. |
-| **System Quality Number (SQN)** | A Van Tharp metric: how big the average R-multiple is, *and* how consistent that pattern is — a big average with wildly unpredictable results scores worse than a smaller, steadier one. | Higher is better, roughly: below 1.6 poor, 2.0-2.4 average, 2.5-2.9 good, 3.0-5.0 excellent, 5.0+ superb. |
-| **Sortino Ratio** | Annualized return divided by how much the *downside-only* volatility was — a version of "risk-adjusted return" that doesn't punish big, unpredictable *wins* the same way it punishes losses. This is the primary metric this project actually trusts for judging a strategy, chosen specifically because it has a real, externally-recognized scale. | Below 0 is bad (losing money risk-adjusted), 0-1 is sub-par, 1-2 is good, 2-3 is very good, above 3 is excellent. |
-| **Calmar Ratio** | Annualized return ÷ worst-case drawdown — "how much return am I getting per unit of worst-case pain." | Directly comparable across strategies or against simple buy-and-hold, regardless of scale. Higher is better; this is the metric behind the "SPY beat this strategy on a risk-adjusted basis" comparison in Section 11. |
-| **Beta (vs. S&P 500)** | How much this strategy's daily moves track the S&P 500's — a statistical measure of "how correlated is this with the broad market." | Near 0 means barely correlated; near 1 means it moves about as much as the market does; above 1 means it's more volatile than the market in the same direction. |
-| **Alpha (vs. S&P 500)** | The extra return *left over* after accounting for that market correlation — "is this actually adding value beyond just being exposed to a rising market, or would a leveraged S&P 500 fund alone have done just as well?" | Positive alpha is the real prize — it means genuine, strategy-specific value, not just riding the market up. Negative alpha means the raw return looked fine but wasn't actually earning its keep. |
-| **Best / Worst R** | The single best and single worst trade, in R-multiples. | Shows how much of the total result is riding on outlier trades — a huge gap between "average R" and "best R" is a sign returns are concentrated in a few big winners, not evenly spread. |
-| **Longest Losing Streak** | The most consecutive losing trades in a row. | A gut-check for what a rough stretch actually feels like while it's happening, separate from the eventual math working out. |
+**Calmar ratio** = annualized return ÷ worst drawdown. "How much return per unit of worst-case pain." Current config: **0.93** (2019-2024), **0.92** (2020-2022), **0.80** (2023-2026), **4.66** (last 12 months).
 
-**A worked example, from this guide's own trade walkthrough:** the SPXL trade in Section 7 closed at +1.03R on unit 1 and +0.51R on unit 2 — real, positive R-multiples that feed directly into the Avg R-multiple, Profit Factor, and SQN numbers for the whole backtest. Multiply that pattern across every trade in a given window, and that's where every number in the table above actually comes from — none of it is estimated or modeled, it's all a direct roll-up of real, individual trade outcomes (or, for the metrics based on the day-by-day account value like Max Drawdown, Ulcer Index, Sortino, and Calmar, a direct roll-up of the daily account value itself).
+**Sortino ratio** = annualized return ÷ typical downside severity, ignoring upside entirely (a huge win never counts against it, unlike a plain volatility measure). Has real external benchmarks: below 1 weak, 1-2 good, 2-3 very good, above 3 excellent. Current config: **1.25, 0.90, 1.53, 3.03** across the same four windows — solidly "good" to "excellent."
+
+**Alpha vs. SPY** — the most important one for the actual question that matters: is the extra risk being taken here *actually* worth it, compared to simply owning the S&P 500? Alpha is the annualized return left over *after* accounting for how much extra market exposure (beta) this strategy carries. Current config: **+12.5, +9.9, +5.7, +33.6** — positive in every tested window, meaning yes, by this measure, the strategy is adding real value beyond just being a leveraged bet on the market, not merely riding extra beta the way the old crypto version mostly was.
 
 ---
 
-## 14. Where things honestly stand right now
+## 12. The goals that now govern every decision
 
-**What's solid:** the mechanism itself (entry rules, position sizing, pyramiding, exits including the new trailing stop) is tested across all four standard historical windows, not just the ones that happened to look good, and every real bug found along the way — including a subtle one in the backtest engine itself — got fixed and verified rather than assumed away.
+Settled explicitly during this design process, and the actual bar for judging anything from here forward:
 
-**What's genuinely unproven:** whether this specific ETF configuration has a repeatable edge worth real capital, long-term. The strongest test result (the most recent 12 months) is real and encouraging, but it's one window, it doesn't clearly beat simple buy-and-hold on a risk-adjusted basis, and the 2020-2022 window is a genuine, newly-confirmed weak spot from real leverage risk, not a hypothetical one anymore.
-
-**The honest next step isn't "commit real capital" yet** — it's letting a live paper track record actually accumulate under this new configuration (the crypto-era live history doesn't transfer, this is functionally a different strategy now), and deciding deliberately, with the Section 12 metrics in hand, whether the risk-adjusted case is actually there.
-
----
-
-## 15. Glossary
-
-- **Backtest** — simulating the strategy against historical prices, no real money involved
-- **Paper trading** — running for real, in real time, against a broker, using fake money
-- **Signal** — a computed BUY or SELL trigger for a specific ticker on a specific day
-- **Position** — a currently-held (open) trade
-- **Entry / Exit** — opening / closing a position
-- **Stop-loss (fixed)** — an automatic sell if a position falls too far below its entry price, capping the loss
-- **Trailing stop** — a stop-loss that moves UP as a position climbs, protecting gains instead of just capping losses — see Section 7
-- **Trend exit** — a sell triggered by the trend itself reversing (here: a new 10-day low), as opposed to either kind of stop-loss
-- **Take-profit** — an automatic sell once a position is up a set amount (currently switched off — winners aren't capped)
-- **N / ATR** — a rolling measure of how much a ticker typically moves; used to size positions and set stops relative to each ticker's own volatility
-- **Pyramiding** — adding more to an already-winning position as it proves itself right
-- **R-multiple** — a trade's profit or loss expressed as a multiple of what was originally risked (e.g. "+3R" = made 3 times the amount risked)
-- **CAGR** — Compound Annual Growth Rate; the steady yearly growth rate equivalent to the actual (often lumpier) result
-- **Drawdown** — a decline from a peak account value; *max drawdown* is the worst such decline observed
-- **Ulcer Index** — like max drawdown, but also accounts for how long a decline lasted, not just how deep
-- **SQN (System Quality Number)** — a score for how consistent a strategy's edge is, not just how big
-- **Sortino Ratio** — annualized return divided by downside-only volatility; this project's primary trusted risk-adjusted metric
-- **Calmar Ratio** — annualized return divided by max drawdown; "return per unit of worst-case pain"
-- **Profit Factor** — total dollars won divided by total dollars lost
-- **Beta** — how correlated a strategy's returns are with a benchmark (here, the S&P 500)
-- **Alpha** — the return left over after removing what Beta alone would predict; the real measure of added value
-- **Leveraged ETF** — a fund that aims to deliver a multiple (here, 3x) of a benchmark's daily return, using derivatives/debt — amplifies both gains and losses, and can decay in choppy or declining markets even if the underlying benchmark is roughly flat
+- **More risk than plain buy-and-hold (SPY) is fine — but only if it's genuinely compensated, risk-adjusted.** Not just a higher raw-return number; Calmar, Sortino, and alpha vs. SPY have to actually improve, or the extra risk isn't earning its keep.
+- **A personal drawdown ceiling of 15-30%** — elastic upward if the system is demonstrably earning real, risk-adjusted edge, not a hard wall on its own.
+- **A 1-2 year judgment horizon.** Not weeks, not the first bad trade.
+- **This represents a small, side-experiment allocation** — money fully prepared to be lost entirely without affecting anything else, in service of learning whether a systematic approach can actually work.
 
 ---
 
-## 16. Ready-made explanations, at different depths
+## 13. Where things honestly stand right now
 
-**10 seconds:** "It's a rules-based trading program for leveraged ETFs, currently running with fake money to prove itself before we'd ever consider using real money."
+**What's solid:** the mechanism (entries, ATR sizing, pyramiding, trailing stops) is well-tested across multiple historical windows, and the two big changes live in the current config (tightened stops, adding ERX) were both large, clean, mechanism-backed wins — not marginal parameter-search artifacts.
 
-**1 minute:** "We built a computer program that watches six leveraged ETFs and buys or sells based on fixed, tested rules — never a gut call. It only risks a small, fixed percentage of the account on any one trade, and every trade has a predetermined exit plan before it's even placed, including a trailing stop that locks in gains as a winning position climbs. It's running on a real brokerage account right now, but with fake money, specifically so we can watch it handle real market conditions with zero actual risk before deciding whether it's earned the right to use real money. This used to trade crypto instead — that version is preserved separately, but the current live strategy switched to ETFs after crypto's backtested numbers turned out to lean heavily on a historic bull market rather than durable, repeatable edge."
+**What's genuinely unproven:** whether any of this holds up on real, unseen market conditions. The live track record is essentially zero. Two of the four backtested windows remain real, acknowledged weak points. Several smaller, evidence-mixed improvements (tighter pyramid caps, a different entry period, higher risk-per-unit) were found but deliberately left out, specifically to avoid compounding overfitting risk on top of an already heavily-tuned config.
 
-**5 minutes:** everything in Sections 5 through 8 above, using the real SPXL trade as the walkthrough — how it decided to buy, how much it bought, how the trailing stop protected the gain, and how pyramiding added to the winning position.
+**The plan from here**: stop tuning against the same backtested history, let the paper account actually run for a real stretch, and treat that — not another round of parameter search — as the next real source of insight.
+
+---
+
+## 14. Glossary
+
+- **Backtest** — simulating against historical prices, no real money
+- **Paper trading** — real-time, real broker, fake money
+- **Signal** — a computed BUY/SELL trigger for a ticker on a given day
+- **Position** — a currently-held (open) trade; a **stack** if pyramided
+- **Stop-loss** — automatic sell if a position falls too far
+- **Trailing stop** — a stop that rises as a winning position's peak price rises, locking in more gain over time
+- **Trend exit** — sell triggered by the trend reversing (a new 10-day low)
+- **N / ATR** — rolling measure of a ticker's typical move; sizes positions and stops
+- **Pyramiding** — adding to an already-winning position
+- **R-multiple** — profit/loss as a multiple of what was risked ("+3R" = 3× the risk)
+- **Calmar ratio** — annualized return ÷ worst drawdown
+- **Sortino ratio** — annualized return ÷ downside-only volatility
+- **Alpha** — excess return beyond what's explained by extra market exposure (beta)
+- **Beta** — how much a strategy's daily moves track the broader market's
+- **Drawdown** — decline from a peak account value; *max drawdown* is the worst one
+- **Market impact / spread** — real trading costs from crossing the bid-ask spread and moving the market with a large order; modeled as optional, off by default at this project's current small scale
+
+---
+
+## 15. How to explain this to someone else
+
+**10 seconds:** "It's a rules-based trading program for leveraged ETFs, currently running with fake money to prove itself before we'd ever consider real money."
+
+**1 minute:** "We built a computer program that watches seven leveraged ETFs and buys or sells based on fixed, tested rules — never a gut call. It only risks a small, fixed percentage of the account on any one trade, and it started out on crypto before we found that edge was mostly just riding a bull market, not real skill — so we moved to something that actually beats simple index investing after accounting for the extra risk. It's running on a real brokerage account right now, but with fake money, so we can watch it handle real conditions before deciding whether it's earned the right to use real money."
+
+**5 minutes:** Sections 5 through 8 above, using the real TECL win and TQQQ loss as the walkthrough — how it decides to buy, how much, and both ways a trade can actually end.
