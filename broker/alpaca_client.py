@@ -145,6 +145,23 @@ class AlpacaBroker:
         order = self.client.submit_order(MarketOrderRequest(**kwargs))
         return {"id": str(order.id), "symbol": _from_alpaca_symbol(order.symbol, order.asset_class), "side": side, "status": str(order.status)}
 
+    def is_market_open(self, symbol: str) -> bool:
+        """
+        Whether `symbol` can be traded RIGHT NOW. Crypto trades 24/7 so is
+        always considered open. Equities/ETFs key off Alpaca's own market
+        clock (accounts for weekends, holidays, half-days -- more reliable
+        than computing NYSE hours by hand), since a DAY market order
+        submitted while the equity market is closed doesn't reject, it just
+        queues silently until the next open -- exposing the eventual fill
+        to whatever the market does overnight (confirmed directly: a paper
+        BUY submitted after the close filled the next morning 1-2.4% away
+        from the price the entry was sized against). Callers use this to
+        skip the entry instead of queuing it blind.
+        """
+        if _is_crypto(symbol):
+            return True
+        return self.client.get_clock().is_open
+
     def get_latest_price(self, symbol: str) -> float:
         """
         Live quote for `symbol` (canonical, yfinance-style) straight from

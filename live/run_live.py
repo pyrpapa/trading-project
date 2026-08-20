@@ -158,6 +158,39 @@ def main():
     pyramid_unit_interval_n = pyramid_cfg.get("unit_interval_n", 0.5)
     pyramid_max_units = pyramid_cfg.get("max_units", 4)
 
+    # Entry price guard -- rejects a BUY (fresh entry or pyramid add) that
+    # would either (a) queue overnight because the market's closed right
+    # now, or (b) already be chasing a price too far from the signal's own
+    # reference close. Calibrated against 2,522 historical BUY signals
+    # across this watchlist: close-to-next-open gaps have a median of
+    # ~0.29N and 1.0N covers ~95% of them, so max_gap_atr_multiple 0.75
+    # blocks only the worst ~12% (genuine outliers), not routine noise --
+    # see scratchpad/gap_analysis.py. Requires atr_unit sizing (needs a
+    # per-ticker N to measure the gap against); silently skipped for pct
+    # sizing, same fail-open pattern as the rest of this file.
+    entry_guard_cfg = cfg["risk"].get("entry_price_guard") or {}
+    entry_guard_enabled = entry_guard_cfg.get("enabled", False)
+    entry_guard_max_gap_n = entry_guard_cfg.get("max_gap_atr_multiple", 0.75)
+
+    def entry_blocked_reason(ticker, current_price, signal_close, atr):
+        if not entry_guard_enabled:
+            return None
+        if not broker.is_market_open(ticker):
+            return (
+                "market is closed -- a market order placed now would queue "
+                "until the next session and fill wherever price gaps to, "
+                "instead of near the signal's own close"
+            )
+        if atr is not None and pd.notna(atr) and atr > 0:
+            gap_n = abs(current_price - signal_close) / atr
+            if gap_n > entry_guard_max_gap_n:
+                return (
+                    f"live price ${current_price:.2f} is already {gap_n:.2f}N away from the "
+                    f"signal's ${signal_close:.2f} close (guard threshold {entry_guard_max_gap_n}N) "
+                    f"-- would be chasing, not entering fresh"
+                )
+        return None
+
     print(f"{'[DRY RUN] ' if dry_run else ''}Live check — {dt.date.today()}")
 
     broker = AlpacaBroker()
@@ -351,6 +384,11 @@ def main():
                 continue
             current_price = get_live_price(ticker, df["Close"].iloc[-1])
 
+            blocked_reason = entry_blocked_reason(ticker, current_price, df["Close"].iloc[-1], atr)
+            if blocked_reason:
+                print(f"  {journal.format_blocked(ticker, blocked_reason)} (pyramid add)")
+                continue
+
             open_units = store.find_open_trades(ticker, source="paper")
             if not open_units:
                 print(f"  Note: {ticker} has pyramiding enabled but no Supabase unit "
@@ -463,11 +501,16 @@ def main():
                     print(f"  {journal.format_blocked(ticker, reason)}")
                     continue
 
+        atr = sig_df["atr"].iloc[-1] if "atr" in sig_df.columns else None
         current_price = get_live_price(ticker, df["Close"].iloc[-1])
+
+        blocked_reason = entry_blocked_reason(ticker, current_price, df["Close"].iloc[-1], atr)
+        if blocked_reason:
+            print(f"  {journal.format_blocked(ticker, blocked_reason)}")
+            continue
 
         max_position_value = portfolio_value * max_position_pct_for(ticker)
         room_left = (portfolio_value * max_invested_pct) - invested_value
-        atr = sig_df["atr"].iloc[-1] if "atr" in sig_df.columns else None
         sizing_note = None
         risk_per_share = None
 

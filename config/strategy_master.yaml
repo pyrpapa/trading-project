@@ -220,6 +220,24 @@ risk:
   trailing_stop:
     enabled: true
     atr_multiple: 1.0
+  # ENTRY PRICE GUARD (2026-08-20): live/run_live.py-only (backtest has no
+  # concept of a closed market or a live quote diverging from the signal
+  # close, so this key is inert there). Added after a paper BUY on TECL/ERX
+  # was submitted with the market already closed, sat "accepted" all night,
+  # and filled the next open 1.1%/2.4% away from the price it was sized
+  # against -- not a bug, just an unhedged overnight gap the schedule
+  # exposed every entry to (see .github/workflows/daily-trading-check.yml's
+  # own history/comments for the schedule-timing side of this fix).
+  # max_gap_atr_multiple 0.75 calibrated against 2,522 historical BUY
+  # signals across this exact watchlist: close-to-next-open gaps have a
+  # median of ~0.29N, 1.0N covers ~95% of them -- 0.75N blocks only the
+  # worst ~12% (genuine outliers), not routine day-to-day noise. Neither of
+  # the two gaps that prompted this (0.15N, 0.60N) would have been blocked
+  # by it -- both were normal volatility, not something a guard should be
+  # catching; see scratchpad/gap_analysis.py for the full distribution.
+  entry_price_guard:
+    enabled: true
+    max_gap_atr_multiple: 0.75
 
 backtest:
   starting_cash: 10000
