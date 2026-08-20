@@ -2,14 +2,23 @@ name: Daily trading check
 
 on:
   schedule:
-    # config/strategy_master.yaml is now leveraged ETFs (2026-08-16 pivot
-    # -- see that file's own header for the full reasoning) -- back to
-    # equities market hours, weekdays only. 30 20 * * 1-5 = 20:30 UTC
-    # (4:30pm ET), 30 min after the stock market close, Mon-Fri only.
-    # If you switch back to config/strategy_master_crypto_v36.yaml
-    # (crypto, 24/7, no weekday restriction), switch this back to
-    # "30 0 * * *" too -- see that file's own header.
-    - cron: "30 20 * * 1-5"
+    # Runs ~5 min BEFORE the NYSE 4:00pm ET close, not after it (2026-08-20
+    # change -- was "30 20 * * 1-5" = 4:30pm ET, 30 min AFTER close).
+    # Running after close meant every BUY was a DAY market order submitted
+    # while the market was shut: it sat "accepted" all night and only
+    # filled at the NEXT day's open, 1-2.4% away from the price it was
+    # sized against on a real paper trade -- an unhedged overnight gap the
+    # backtest never pays (it assumes same-close fills) and the schedule
+    # was needlessly exposing every single entry to. Running before close
+    # instead lets the market order fill within seconds, near the same
+    # close price the signal/sizing math used.
+    #
+    # Two cron entries because GitHub Actions cron is UTC-only and doesn't
+    # know about US DST -- the "gate" step below figures out which one
+    # actually lands in the 15:50-16:05 ET window (the +/-5min slop covers
+    # GitHub's own scheduling jitter) and no-ops the other.
+    - cron: "55 19 * * 1-5"  # ~15:55 ET during EDT (UTC-4, roughly mid-Mar to early-Nov)
+    - cron: "55 20 * * 1-5"  # ~15:55 ET during EST (UTC-5, roughly early-Nov to mid-Mar)
   workflow_dispatch:
     inputs:
       strategy_config:
@@ -21,16 +30,37 @@ jobs:
   run-live-check:
     runs-on: ubuntu-latest
     steps:
+      - name: Gate on US Eastern time (skip the wrong-DST cron trigger)
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual run (workflow_dispatch) -- always proceeds."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ET_TIME=$(TZ="America/New_York" date +%H:%M)
+          echo "Current US Eastern time: $ET_TIME"
+          if [[ "$ET_TIME" < "15:50" || "$ET_TIME" > "16:05" ]]; then
+            echo "Outside the 15:50-16:05 ET window -- this is the other DST trigger, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.skip != 'true'
         with:
           python-version: "3.11"
 
       - name: Install dependencies
+        if: steps.gate.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: Run live trading check
+        if: steps.gate.outputs.skip != 'true'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
