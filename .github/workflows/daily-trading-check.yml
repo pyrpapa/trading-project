@@ -15,8 +15,20 @@ on:
     #
     # Two cron entries because GitHub Actions cron is UTC-only and doesn't
     # know about US DST -- the "gate" step below figures out which one
-    # actually lands in the 15:50-16:05 ET window (the +/-5min slop covers
-    # GitHub's own scheduling jitter) and no-ops the other.
+    # actually lands in the 15:25-16:15 ET window and no-ops the other.
+    #
+    # Window widened 2026-08-21 after BOTH of that day's scheduled runs got
+    # gated out (confirmed via the Actions API): GitHub delayed the correct
+    # 15:55 ET trigger to 16:10 ET, which missed the original 15:50-16:05
+    # window entirely -- silently zero trading checks that day. GitHub's
+    # own docs say scheduled-workflow delays are commonly a few minutes but
+    # can run much longer under load, and 4pm ET (market close) is a
+    # popular cron target, so a 15-minute window was never going to be
+    # reliably wide enough. Safe to widen past the close now that
+    # risk.entry_price_guard's market-closed check independently protects
+    # against a bad fill if a run does land after 16:00 -- worst case on an
+    # extremely delayed day is a skipped entry (re-checked next session),
+    # not a blind overnight fill.
     - cron: "55 19 * * 1-5"  # ~15:55 ET during EDT (UTC-4, roughly mid-Mar to early-Nov)
     - cron: "55 20 * * 1-5"  # ~15:55 ET during EST (UTC-5, roughly early-Nov to mid-Mar)
   workflow_dispatch:
@@ -40,8 +52,8 @@ jobs:
           fi
           ET_TIME=$(TZ="America/New_York" date +%H:%M)
           echo "Current US Eastern time: $ET_TIME"
-          if [[ "$ET_TIME" < "15:50" || "$ET_TIME" > "16:05" ]]; then
-            echo "Outside the 15:50-16:05 ET window -- this is the other DST trigger, skipping."
+          if [[ "$ET_TIME" < "15:25" || "$ET_TIME" > "16:15" ]]; then
+            echo "Outside the 15:25-16:15 ET window -- this is the other DST trigger, skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
