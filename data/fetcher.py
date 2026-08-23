@@ -84,6 +84,24 @@ def fetch_watchlist(tickers: list, start: str, end: str, namespace: str = "defau
     return {ticker: fetch(ticker, start, end, namespace=namespace) for ticker in tickers}
 
 
+def fetch_live_quote(ticker: str) -> float:
+    """
+    Live/near-real-time price for `ticker` straight from yfinance --
+    independent of fetch()'s cached daily bars. Exists only so
+    live/run_live.py can cross-check it against Alpaca's own live quote
+    before a BUY (broker.alpaca_client.AlpacaBroker.get_latest_price):
+    two independently-sourced quotes disagreeing is a sign one of them
+    is stale or wrong, which neither source alone would ever reveal
+    about itself.
+    """
+    import yfinance as yf
+
+    price = yf.Ticker(ticker).fast_info.last_price
+    if price is None or price <= 0:
+        raise RuntimeError(f"yfinance returned no usable live price for {ticker!r}")
+    return float(price)
+
+
 if __name__ == "__main__":
     # Populate the cache for a reasonable default range when run directly,
     # e.g.: python data/fetcher.py
