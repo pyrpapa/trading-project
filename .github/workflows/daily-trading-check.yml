@@ -2,35 +2,45 @@ name: Daily trading check
 
 on:
   schedule:
-    # Runs ~5 min BEFORE the NYSE 4:00pm ET close, not after it (2026-08-20
-    # change -- was "30 20 * * 1-5" = 4:30pm ET, 30 min AFTER close).
-    # Running after close meant every BUY was a DAY market order submitted
-    # while the market was shut: it sat "accepted" all night and only
-    # filled at the NEXT day's open, 1-2.4% away from the price it was
-    # sized against on a real paper trade -- an unhedged overnight gap the
-    # backtest never pays (it assumes same-close fills) and the schedule
-    # was needlessly exposing every single entry to. Running before close
-    # instead lets the market order fill within seconds, near the same
-    # close price the signal/sizing math used.
+    # Runs ~10 min after the NYSE 9:30am ET open (2026-08-22 change -- was
+    # "55 19/20 * * 1-5" = ~15:55 ET, 5 min before close). Moved to the
+    # morning by request: trading action now happens near the open instead
+    # of near the close.
+    #
+    # The BUY/SELL signal itself is unaffected by this -- it always keys
+    # off the last fully-completed daily bar (see live/run_live.py's
+    # module docstring), so it's identical whether this runs at 9:40am or
+    # 3:55pm. What changes is the gap between that signal's reference
+    # close and the live price a BUY actually executes at: near the old
+    # close-time schedule that gap was usually small (minutes of intraday
+    # drift); now it's the full overnight gap. risk.entry_price_guard
+    # (config/strategy_master.yaml) already exists to bound exactly this
+    # kind of gap and was left enabled specifically to make this schedule
+    # move safe. risk.spread_guard was added alongside this change as a
+    # second, independent check -- comparing Alpaca's live quote against
+    # yfinance's own live quote before every BUY, since a stale/glitched
+    # feed on either side is more likely shortly after the open than late
+    # in the session, and entry_price_guard alone doesn't catch the two
+    # data sources disagreeing with each other.
+    #
+    # 9:40 rather than 9:30 sharp -- skips the opening-auction minute,
+    # where spreads/volatility are at their widest (the exact noise
+    # spread_guard exists to filter out, so there's no reason to invite
+    # more of it than necessary).
     #
     # Two cron entries because GitHub Actions cron is UTC-only and doesn't
     # know about US DST -- the "gate" step below figures out which one
-    # actually lands in the 15:25-16:15 ET window and no-ops the other.
-    #
-    # Window widened 2026-08-21 after BOTH of that day's scheduled runs got
-    # gated out (confirmed via the Actions API): GitHub delayed the correct
-    # 15:55 ET trigger to 16:10 ET, which missed the original 15:50-16:05
-    # window entirely -- silently zero trading checks that day. GitHub's
-    # own docs say scheduled-workflow delays are commonly a few minutes but
-    # can run much longer under load, and 4pm ET (market close) is a
-    # popular cron target, so a 15-minute window was never going to be
-    # reliably wide enough. Safe to widen past the close now that
-    # risk.entry_price_guard's market-closed check independently protects
-    # against a bad fill if a run does land after 16:00 -- worst case on an
-    # extremely delayed day is a skipped entry (re-checked next session),
-    # not a blind overnight fill.
-    - cron: "55 19 * * 1-5"  # ~15:55 ET during EDT (UTC-4, roughly mid-Mar to early-Nov)
-    - cron: "55 20 * * 1-5"  # ~15:55 ET during EST (UTC-5, roughly early-Nov to mid-Mar)
+    # actually lands in the 09:30-10:30 ET window and no-ops the other.
+    # Window is a full hour wide (not just 09:35-09:45) because GitHub's
+    # own docs say scheduled-workflow delays are commonly a few minutes
+    # but can run much longer under load -- confirmed directly on
+    # 2026-08-21, when a run meant for 15:55 ET landed at 16:10 ET and
+    # missed that day's (narrower) window entirely, silently skipping the
+    # check. A skipped/late-but-still-morning run here just means a
+    # somewhat later entry, still caught by entry_price_guard and
+    # spread_guard the same as an on-time one.
+    - cron: "40 13 * * 1-5"  # ~9:40 ET during EDT (UTC-4, roughly mid-Mar to early-Nov)
+    - cron: "40 14 * * 1-5"  # ~9:40 ET during EST (UTC-5, roughly early-Nov to mid-Mar)
   workflow_dispatch:
     inputs:
       strategy_config:
@@ -52,8 +62,8 @@ jobs:
           fi
           ET_TIME=$(TZ="America/New_York" date +%H:%M)
           echo "Current US Eastern time: $ET_TIME"
-          if [[ "$ET_TIME" < "15:25" || "$ET_TIME" > "16:15" ]]; then
-            echo "Outside the 15:25-16:15 ET window -- this is the other DST trigger, skipping."
+          if [[ "$ET_TIME" < "09:30" || "$ET_TIME" > "10:30" ]]; then
+            echo "Outside the 09:30-10:30 ET window -- this is the other DST trigger, skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"

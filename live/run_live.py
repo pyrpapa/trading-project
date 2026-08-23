@@ -6,9 +6,14 @@ Runs one check-and-trade cycle against Alpaca paper trading:
   4. Open new positions for tickers with a BUY signal, sized per config risk rules
   5. Log everything to Supabase if credentials are present
 
-Meant to be run once per trading day, ideally shortly before market close
-so the day's full price/volume data is available. Schedule it with cron,
-a systemd timer, or GitHub Actions — see README for examples.
+Meant to be run once per trading day. The BUY/SELL signal always keys off
+the last fully-completed daily bar regardless of what time this runs, so
+it can run shortly after the open instead of near close -- the tradeoff
+is that "signal close" and "live execution price" then differ by the
+overnight gap rather than a few minutes of intraday drift, which
+entry_price_guard and risk.spread_guard (see config) exist to bound.
+Schedule it with cron, a systemd timer, or GitHub Actions — see README
+for examples.
 
 Usage:
     python live/run_live.py                                   # run for real (paper account), config/strategy_master.yaml
@@ -189,6 +194,40 @@ def main():
                     f"signal's ${signal_close:.2f} close (guard threshold {entry_guard_max_gap_n}N) "
                     f"-- would be chasing, not entering fresh"
                 )
+        return None
+
+    # Spread guard -- cross-checks Alpaca's live quote (what a BUY would
+    # actually fill near) against yfinance's own independent live quote
+    # right before submitting the order. Unlike entry_price_guard above
+    # (which measures how far price has moved since the SIGNAL's
+    # reference close -- a market-move check), this catches the two data
+    # sources themselves disagreeing -- a stale/glitched feed on either
+    # side, which neither source can detect about itself and which
+    # matters more now that entries can happen shortly after the open,
+    # when quotes are more prone to lag/staleness than they are late in
+    # the session. Fails CLOSED (blocks the trade) if the yfinance quote
+    # can't be fetched at all -- unlike every other fail-open check in
+    # this file, this one's entire job is confirming the two prices
+    # agree, so "couldn't check" has to mean "don't buy," not "assume
+    # it's fine." Worst case is a skipped entry, re-checked next run.
+    spread_guard_cfg = cfg["risk"].get("spread_guard") or {}
+    spread_guard_enabled = spread_guard_cfg.get("enabled", False)
+    spread_guard_max_pct = spread_guard_cfg.get("max_spread_pct", 0.75)
+
+    def spread_blocked_reason(ticker, alpaca_price):
+        if not spread_guard_enabled:
+            return None
+        try:
+            yfinance_price = fetcher.fetch_live_quote(ticker)
+        except Exception as e:
+            return f"couldn't verify yfinance's live quote to cross-check against Alpaca's (${alpaca_price:.2f}): {e}"
+        spread_pct = abs(alpaca_price - yfinance_price) / ((alpaca_price + yfinance_price) / 2) * 100
+        if spread_pct > spread_guard_max_pct:
+            return (
+                f"Alpaca (${alpaca_price:.2f}) and yfinance (${yfinance_price:.2f}) live quotes "
+                f"disagree by {spread_pct:.2f}% (guard threshold {spread_guard_max_pct}%) -- "
+                f"one of them may be stale or wrong"
+            )
         return None
 
     print(f"{'[DRY RUN] ' if dry_run else ''}Live check — {dt.date.today()}")
@@ -389,6 +428,11 @@ def main():
                 print(f"  {journal.format_blocked(ticker, blocked_reason)} (pyramid add)")
                 continue
 
+            blocked_reason = spread_blocked_reason(ticker, current_price)
+            if blocked_reason:
+                print(f"  {journal.format_blocked(ticker, blocked_reason)} (pyramid add)")
+                continue
+
             open_units = store.find_open_trades(ticker, source="paper")
             if not open_units:
                 print(f"  Note: {ticker} has pyramiding enabled but no Supabase unit "
@@ -505,6 +549,11 @@ def main():
         current_price = get_live_price(ticker, df["Close"].iloc[-1])
 
         blocked_reason = entry_blocked_reason(ticker, current_price, df["Close"].iloc[-1], atr)
+        if blocked_reason:
+            print(f"  {journal.format_blocked(ticker, blocked_reason)}")
+            continue
+
+        blocked_reason = spread_blocked_reason(ticker, current_price)
         if blocked_reason:
             print(f"  {journal.format_blocked(ticker, blocked_reason)}")
             continue

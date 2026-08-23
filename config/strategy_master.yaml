@@ -238,6 +238,22 @@ risk:
   entry_price_guard:
     enabled: true
     max_gap_atr_multiple: 0.75
+  # SPREAD GUARD (2026-08-22): live/run_live.py-only, same as
+  # entry_price_guard above. Added when the schedule moved to shortly
+  # after the open (.github/workflows/daily-trading-check.yml) instead
+  # of shortly before close -- quotes are more prone to a stale/glitched
+  # feed near the open than late in the session, and entry_price_guard
+  # alone only catches a genuine price move, not the two data sources
+  # (Alpaca's live quote vs. yfinance's own live quote) disagreeing with
+  # each other. max_spread_pct is an initial estimate, NOT calibrated
+  # against logged live spreads yet (no live-quote history exists to
+  # calibrate against, unlike max_gap_atr_multiple above which was
+  # checked against 2,522 historical signals) -- watch the "disagree by
+  # X%" log lines after this ships and tighten/loosen once real spread
+  # behavior on this watchlist is known.
+  spread_guard:
+    enabled: true
+    max_spread_pct: 0.75
 
 backtest:
   starting_cash: 10000
