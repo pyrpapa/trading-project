@@ -205,16 +205,17 @@ def main():
     # side, which neither source can detect about itself and which
     # matters more now that entries can happen shortly after the open,
     # when quotes are more prone to lag/staleness than they are late in
-    # the session. Fails CLOSED (blocks the trade) if the yfinance quote
-    # can't be fetched at all -- unlike every other fail-open check in
-    # this file, this one's entire job is confirming the two prices
-    # agree, so "couldn't check" has to mean "don't buy," not "assume
-    # it's fine." Worst case is a skipped entry, re-checked next run.
+    # the session. NON-BLOCKING (2026-08-26): only ever logged as a
+    # warning, never skips the trade -- Alpaca's own quote is what the
+    # order actually fills against, and by the time this runs the entry/
+    # pyramid-threshold checks (both keyed off that same Alpaca price)
+    # have already confirmed the trade is otherwise good, so a yfinance
+    # disagreement (or yfinance being unreachable) no longer vetoes it.
     spread_guard_cfg = cfg["risk"].get("spread_guard") or {}
     spread_guard_enabled = spread_guard_cfg.get("enabled", False)
     spread_guard_max_pct = spread_guard_cfg.get("max_spread_pct", 0.75)
 
-    def spread_blocked_reason(ticker, alpaca_price):
+    def spread_warning_reason(ticker, alpaca_price):
         if not spread_guard_enabled:
             return None
         try:
@@ -428,11 +429,6 @@ def main():
                 print(f"  {journal.format_blocked(ticker, blocked_reason)} (pyramid add)")
                 continue
 
-            blocked_reason = spread_blocked_reason(ticker, current_price)
-            if blocked_reason:
-                print(f"  {journal.format_blocked(ticker, blocked_reason)} (pyramid add)")
-                continue
-
             open_units = store.find_open_trades(ticker, source="paper")
             if not open_units:
                 print(f"  Note: {ticker} has pyramiding enabled but no Supabase unit "
@@ -445,6 +441,18 @@ def main():
             threshold_price = last_unit["entry_price"] + pyramid_unit_interval_n * atr
             if current_price < threshold_price:
                 continue
+
+            # Spread check runs LAST, after confirming the Supabase-priced
+            # pyramid threshold is actually met on Alpaca's own price --
+            # otherwise it'd fire (and burn a yfinance call) on tickers that
+            # weren't due for an add this run regardless of quote agreement.
+            # Non-blocking: Alpaca's price already cleared the threshold
+            # above, so a yfinance disagreement is logged but doesn't stop
+            # the add.
+            warning_reason = spread_warning_reason(ticker, current_price)
+            if warning_reason:
+                print(f"  WARNING {ticker}: {warning_reason} -- proceeding anyway, "
+                      f"Alpaca's price still clears the pyramid-add threshold (pyramid add)")
 
             stop_atr_multiple = cfg["risk"]["stop_atr_multiple"]
             risk_pct_per_unit = cfg["risk"]["risk_pct_per_unit"]
@@ -553,10 +561,13 @@ def main():
             print(f"  {journal.format_blocked(ticker, blocked_reason)}")
             continue
 
-        blocked_reason = spread_blocked_reason(ticker, current_price)
-        if blocked_reason:
-            print(f"  {journal.format_blocked(ticker, blocked_reason)}")
-            continue
+        # Non-blocking: Alpaca's price already cleared entry_price_guard
+        # above (and the BUY signal itself, checked earlier in this loop),
+        # so a yfinance disagreement is logged but doesn't stop the entry.
+        warning_reason = spread_warning_reason(ticker, current_price)
+        if warning_reason:
+            print(f"  WARNING {ticker}: {warning_reason} -- proceeding anyway, "
+                  f"Alpaca's price still clears entry conditions")
 
         max_position_value = portfolio_value * max_position_pct_for(ticker)
         room_left = (portfolio_value * max_invested_pct) - invested_value
