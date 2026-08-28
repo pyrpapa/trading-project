@@ -2,45 +2,38 @@ name: Daily trading check
 
 on:
   schedule:
-    # Runs ~10 min after the NYSE 9:30am ET open (2026-08-22 change -- was
-    # "55 19/20 * * 1-5" = ~15:55 ET, 5 min before close). Moved to the
-    # morning by request: trading action now happens near the open instead
-    # of near the close.
+    # SIMPLIFIED (2026-08-28): one fixed UTC cron, no DST gate script.
     #
-    # The BUY/SELL signal itself is unaffected by this -- it always keys
-    # off the last fully-completed daily bar (see live/run_live.py's
-    # module docstring), so it's identical whether this runs at 9:40am or
-    # 3:55pm. What changes is the gap between that signal's reference
-    # close and the live price a BUY actually executes at: near the old
-    # close-time schedule that gap was usually small (minutes of intraday
-    # drift); now it's the full overnight gap. risk.entry_price_guard
-    # (config/strategy_master.yaml) already exists to bound exactly this
-    # kind of gap and was left enabled specifically to make this schedule
-    # move safe. risk.spread_guard was added alongside this change as a
-    # second, independent check -- comparing Alpaca's live quote against
-    # yfinance's own live quote before every BUY, since a stale/glitched
-    # feed on either side is more likely shortly after the open than late
-    # in the session, and entry_price_guard alone doesn't catch the two
-    # data sources disagreeing with each other.
+    # Previously used two cron entries (one per DST offset) plus a "gate"
+    # step that compared wall-clock ET time against a 09:30-10:30 window
+    # and no-op'd whichever trigger landed outside it -- see git history
+    # for that version. Dropped because that gate couldn't tell "the
+    # wrong-DST trigger firing on time" apart from "the right trigger
+    # firing very late" -- both just look like "ET time is outside the
+    # window" to it. On 2026-08-27, a GitHub Actions platform incident
+    # (see githubstatus.com history around 2026-08-26/27 -- Actions
+    # database saturation, then elevated schedule-dispatch delays)
+    # delivered BOTH cron triggers roughly 9 hours late, and the gate
+    # silently discarded both, leaving the strategy with no live check
+    # for two full trading days and no visible error anywhere.
     #
-    # 9:40 rather than 9:30 sharp -- skips the opening-auction minute,
-    # where spreads/volatility are at their widest (the exact noise
-    # spread_guard exists to filter out, so there's no reason to invite
-    # more of it than necessary).
-    #
-    # Two cron entries because GitHub Actions cron is UTC-only and doesn't
-    # know about US DST -- the "gate" step below figures out which one
-    # actually lands in the 09:30-10:30 ET window and no-ops the other.
-    # Window is a full hour wide (not just 09:35-09:45) because GitHub's
-    # own docs say scheduled-workflow delays are commonly a few minutes
-    # but can run much longer under load -- confirmed directly on
-    # 2026-08-21, when a run meant for 15:55 ET landed at 16:10 ET and
-    # missed that day's (narrower) window entirely, silently skipping the
-    # check. A skipped/late-but-still-morning run here just means a
-    # somewhat later entry, still caught by entry_price_guard and
-    # spread_guard the same as an on-time one.
-    - cron: "40 13 * * 1-5"  # ~9:40 ET during EDT (UTC-4, roughly mid-Mar to early-Nov)
-    - cron: "40 14 * * 1-5"  # ~9:40 ET during EST (UTC-5, roughly early-Nov to mid-Mar)
+    # 15:00 UTC = 11:00 ET during EDT (roughly mid-Mar to early-Nov) or
+    # 10:00 ET during EST (roughly early-Nov to mid-Mar) -- picked so
+    # EITHER offset lands comfortably inside market hours, past the
+    # opening-auction minute, without any gate logic needed. The
+    # BUY/SELL signal itself is unaffected by exactly when this runs --
+    # it always keys off the last fully-completed daily bar (see
+    # live/run_live.py's module docstring) -- so an hour of DST drift
+    # doesn't change the signal, only the size of the reference-close-
+    # to-live-price gap, which risk.entry_price_guard (config/
+    # strategy_master.yaml) already bounds regardless of cause. A
+    # trigger that lands very late for any reason (GitHub platform
+    # issues included) now just runs late and still executes -- worst
+    # case entry_price_guard or its own "market is closed" check decline
+    # individual trades on stale-gap grounds, same as it already does
+    # for any other late-arriving run. Nothing is silently discarded
+    # anymore.
+    - cron: "0 15 * * 1-5"
   workflow_dispatch:
     inputs:
       strategy_config:
@@ -52,37 +45,16 @@ jobs:
   run-live-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Gate on US Eastern time (skip the wrong-DST cron trigger)
-        id: gate
-        run: |
-          if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "Manual run (workflow_dispatch) -- always proceeds."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          ET_TIME=$(TZ="America/New_York" date +%H:%M)
-          echo "Current US Eastern time: $ET_TIME"
-          if [[ "$ET_TIME" < "09:30" || "$ET_TIME" > "10:30" ]]; then
-            echo "Outside the 09:30-10:30 ET window -- this is the other DST trigger, skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.skip != 'true'
 
       - uses: actions/setup-python@v5
-        if: steps.gate.outputs.skip != 'true'
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        if: steps.gate.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: Run live trading check
-        if: steps.gate.outputs.skip != 'true'
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
