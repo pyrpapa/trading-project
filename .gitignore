@@ -19,3 +19,7 @@ results/*_trades.csv
 # Same rationale, for parameter_sweep.py's output -- fully regeneratable
 # with `python parameter_sweep.py`.
 results/parameter-sweep/
+
+# Same rationale, for holdout_test.py's output -- fully regeneratable
+# with `python holdout_test.py`.
+results/holdout-test/
