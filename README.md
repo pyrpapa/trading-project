@@ -57,7 +57,9 @@ Tables use Row Level Security with no public write policies — reachable only v
 
 ### Running it daily
 
-`.github/workflows/daily-trading-check.yml` runs `live/run_live.py` automatically on a schedule (currently weekday market-hours, since the live strategy is equities/ETFs — see that file's own header if you switch back to the crypto config). Add `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` as repo secrets (Settings → Secrets and variables → Actions) and it just runs — no machine of your own needs to stay on. Trigger it manually anytime from the Actions tab.
+`.github/workflows/daily-trading-check.yml` runs `live/run_live.py` on weekday market-hours (since the live strategy is equities/ETFs — see that file's own header if you switch back to the crypto config). Add `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` as repo secrets (Settings → Secrets and variables → Actions) and it just runs — no machine of your own needs to stay on. Trigger it manually anytime from the Actions tab.
+
+**The actual daily trigger is external, not GitHub's own `schedule:`.** GitHub's native cron for this workflow turned out to be unreliable in practice (see the workflow file's own comments) — hours-late or entirely missing triggers, with no error raised anywhere. The real schedule is an external cron-job.org job that calls this workflow's `workflow_dispatch` REST endpoint directly at a fixed time (10:15 AM America/New_York, DST-aware) every weekday, using a fine-grained GitHub PAT (Actions read/write only, scoped to this repo). That credential lives in the cron-job.org account, not in this repo. GitHub's own `schedule:` trigger is left in as a free backup, not the thing actually driving this day to day. `daily-trading-check-watchdog.yml` opens a GitHub issue if no run succeeds within 20 hours, covering a failure in either path.
 
 `.github/workflows/close-position.yml` is a separate, manual-only workflow for closing one specific position on demand (defaults to a dry run — see its own comments).
 

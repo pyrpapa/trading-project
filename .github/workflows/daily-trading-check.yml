@@ -1,5 +1,32 @@
 name: Daily trading check
 
+# PRIMARY TRIGGER IS EXTERNAL (2026-09-01): the actual daily schedule is
+# now an external cron-job.org job that POSTs to this workflow's
+# `workflow_dispatch` REST endpoint at 10:15 AM America/New_York
+# (DST-aware) every weekday -- NOT the `schedule:` block below. This
+# followed a chronic pattern (documented in that block's own history)
+# of GitHub's native `schedule` trigger firing hours late or not at
+# all, going back to at least early August -- while `workflow_dispatch`
+# has fired instantly every single time it's been tested. The root
+# cause is architectural, not fixable from this repo: `schedule` events
+# go through a separate, platform-wide cron-batch poller shared by
+# every repo on GitHub, while `workflow_dispatch`/API-triggered runs
+# are dispatched directly, bypassing that poller entirely.
+#
+# The cron-job.org credential (a fine-grained GitHub PAT, Actions:
+# read/write only, scoped to this repo) lives in the cron-job.org
+# account, not in this repo -- there is nothing to see here that
+# documents it further; ask whoever set it up (see git blame on this
+# comment) if it needs rotating or the account access is lost.
+#
+# `schedule:` below is kept as a free, harmless backup only -- worth
+# leaving on since it costs nothing and occasionally still fires
+# usefully, but should NOT be treated as the thing actually keeping
+# this running day to day anymore. daily-trading-check-watchdog.yml's
+# "no successful run in 20h" check covers BOTH trigger paths equally
+# (it just checks run history, not trigger type), so it still catches
+# a day where cron-job.org itself fails for any reason (account issue,
+# expired token, etc.) too.
 on:
   schedule:
     # SIMPLIFIED (2026-08-28): one fixed UTC cron, no DST gate script.
@@ -33,7 +60,18 @@ on:
     # individual trades on stale-gap grounds, same as it already does
     # for any other late-arriving run. Nothing is silently discarded
     # anymore.
-    - cron: "0 15 * * 1-5"
+    #
+    # MINUTE SHIFTED OFF :00 (2026-08-31): this schedule simply never
+    # fired at all on 2026-08-31 (the first live weekday after merging
+    # the change above) -- no run object was created, no GitHub Actions
+    # incident on record for that window either, unlike the 2026-08-27
+    # miss. GitHub's own docs call out exactly this failure mode: "the
+    # schedule event can be delayed during periods of high load...
+    # including the start of each hour," and recommend scheduling away
+    # from :00 for that reason -- this cron was sitting on the single
+    # most contended minute of every hour, shared with countless other
+    # repos' schedules. Moved to :13, otherwise unchanged.
+    - cron: "13 15 * * 1-5"
   workflow_dispatch:
     inputs:
       strategy_config:
