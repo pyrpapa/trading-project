@@ -33,7 +33,18 @@ on:
     # individual trades on stale-gap grounds, same as it already does
     # for any other late-arriving run. Nothing is silently discarded
     # anymore.
-    - cron: "0 15 * * 1-5"
+    #
+    # MINUTE SHIFTED OFF :00 (2026-08-31): this schedule simply never
+    # fired at all on 2026-08-31 (the first live weekday after merging
+    # the change above) -- no run object was created, no GitHub Actions
+    # incident on record for that window either, unlike the 2026-08-27
+    # miss. GitHub's own docs call out exactly this failure mode: "the
+    # schedule event can be delayed during periods of high load...
+    # including the start of each hour," and recommend scheduling away
+    # from :00 for that reason -- this cron was sitting on the single
+    # most contended minute of every hour, shared with countless other
+    # repos' schedules. Moved to :13, otherwise unchanged.
+    - cron: "13 15 * * 1-5"
   workflow_dispatch:
     inputs:
       strategy_config:
