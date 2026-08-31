@@ -1,0 +1,66 @@
+name: Daily trading check watchdog
+
+# Catches the specific failure mode of "the scheduled daily-trading-check
+# simply never fired" -- which has happened twice in one week for two
+# different reasons (see daily-trading-check.yml's own history) and, by
+# nature, leaves no error anywhere to notice: no failed run, no log,
+# just silence. This runs independently, ~2 hours after
+# daily-trading-check.yml's own 15:13 UTC trigger, and opens a GitHub
+# issue if no run of that workflow has completed successfully in the
+# last 20 hours. Off the top of the hour for the same reason the
+# trading check's own cron was moved off :00 -- see that workflow's
+# comments.
+#
+# 20-hour lookback (not a parsed ET calendar date) deliberately -- wide
+# enough to cover midnight ET under either DST offset without a
+# timezone library, comfortably short of a full trading day so it can't
+# mistake yesterday's run for today's.
+on:
+  schedule:
+    - cron: "13 17 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  actions: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for a successful daily-trading-check run recently, flag if not
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CUTOFF=$(date -u -d '20 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          RECENT_SUCCESS=$(gh run list --repo "${{ github.repository }}" \
+            --workflow daily-trading-check.yml \
+            --json createdAt,conclusion \
+            --limit 20 \
+            --jq "[.[] | select(.conclusion == \"success\" and .createdAt > \"$CUTOFF\")] | length")
+
+          echo "Successful daily-trading-check run(s) since $CUTOFF: $RECENT_SUCCESS"
+
+          if [ "$RECENT_SUCCESS" -gt 0 ]; then
+            echo "OK -- at least one successful run found, nothing to flag."
+            exit 0
+          fi
+
+          TODAY=$(date -u +%Y-%m-%d)
+          TITLE="daily-trading-check did not run -- $TODAY"
+
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --state open \
+            --search "\"$TITLE\" in:title" \
+            --json number --jq 'length')
+
+          if [ "$EXISTING" -gt 0 ]; then
+            echo "Already flagged today, not opening a duplicate."
+            exit 0
+          fi
+
+          gh issue create --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --body "No successful run of \`daily-trading-check.yml\` in the last 20 hours (checked $(date -u +%Y-%m-%dT%H:%M:%SZ) UTC). The schedule may have failed to fire again -- check the [workflow's runs](https://github.com/${{ github.repository }}/actions/workflows/daily-trading-check.yml) and consider triggering it manually (workflow_dispatch) if the market's still open."
+
+          echo "Opened issue: $TITLE"
