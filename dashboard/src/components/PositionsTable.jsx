@@ -1,16 +1,20 @@
 import { useState } from "react";
 
-function fmtUsd(n) {
+// Shared by SignalsFeed.jsx too (see its import from this file, same
+// pattern already used for Panel/Table/Empty below) -- realized P&L on a
+// closed trade uses the exact same formatting/coloring as unrealized
+// P&L here, no reason to duplicate it.
+export function fmtUsd(n) {
   if (n === null || n === undefined) return "—";
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 }
 
-function fmtPct(n) {
+export function fmtPct(n) {
   if (n === null || n === undefined) return "—";
   return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
-function pnlColor(n) {
+export function pnlColor(n) {
   if (n === null || n === undefined) return "var(--text-primary)";
   return n > 0 ? "var(--positive)" : n < 0 ? "var(--negative)" : "var(--text-primary)";
 }
