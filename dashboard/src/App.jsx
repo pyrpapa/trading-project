@@ -82,7 +82,7 @@ export default function App() {
       <EquityChart snapshots={data.snapshots} />
 
       <div style={{ display: "flex", gap: 12, padding: "20px 24px 0 24px", flexWrap: "wrap" }}>
-        <PositionsTable openTrades={data.openTrades} />
+        <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} />
         <SignalsFeed signals={data.signals} closedTrades={data.closedTrades} />
       </div>
 
