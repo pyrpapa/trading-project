@@ -6,7 +6,8 @@ import SummaryCards from "./components/SummaryCards.jsx";
 import EquityChart from "./components/EquityChart.jsx";
 import PositionsTable from "./components/PositionsTable.jsx";
 import SignalsFeed from "./components/SignalsFeed.jsx";
-import BacktestComparison from "./components/BacktestComparison.jsx";
+import PortfolioAllocation from "./components/PortfolioAllocation.jsx";
+import MonthlyPerformance from "./components/MonthlyPerformance.jsx";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
@@ -15,7 +16,6 @@ export default function App() {
     openTrades: [],
     closedTrades: [],
     signals: [],
-    runs: [],
   });
   const [loadingData, setLoadingData] = useState(false);
 
@@ -31,7 +31,7 @@ export default function App() {
 
   async function fetchAll() {
     setLoadingData(true);
-    const [{ data: snapshots }, { data: openTrades }, { data: closedTrades }, { data: signals }, { data: runs }] = await Promise.all([
+    const [{ data: snapshots }, { data: openTrades }, { data: closedTrades }, { data: signals }] = await Promise.all([
       supabase.from("account_snapshots").select("*").order("created_at", { ascending: true }).limit(200),
       supabase.from("trades").select("*").is("exit_date", null).order("entry_date", { ascending: false }),
       // Closed trades -- joined client-side against `signals` SELL rows
@@ -41,14 +41,12 @@ export default function App() {
       // (ticker, exit_date) rather than assuming a 1:1 row match.
       supabase.from("trades").select("*").not("exit_date", "is", null).order("exit_date", { ascending: false }).limit(100),
       supabase.from("signals").select("*").order("signal_date", { ascending: false }).limit(15),
-      supabase.from("backtest_runs").select("*").order("created_at", { ascending: false }).limit(10),
     ]);
     setData({
       snapshots: snapshots ?? [],
       openTrades: openTrades ?? [],
       closedTrades: closedTrades ?? [],
       signals: signals ?? [],
-      runs: runs ?? [],
     });
     setLoadingData(false);
   }
@@ -82,12 +80,13 @@ export default function App() {
       <EquityChart snapshots={data.snapshots} />
 
       <div style={{ display: "flex", gap: 12, padding: "20px 24px 0 24px", flexWrap: "wrap" }}>
-        <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} />
-        <SignalsFeed signals={data.signals} closedTrades={data.closedTrades} />
+        <PortfolioAllocation openTrades={data.openTrades} />
+        <MonthlyPerformance snapshots={data.snapshots} />
       </div>
 
-      <div style={{ padding: "20px 24px 24px 24px" }}>
-        <BacktestComparison runs={data.runs} />
+      <div style={{ display: "flex", gap: 12, padding: "20px 24px 24px 24px", flexWrap: "wrap" }}>
+        <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} />
+        <SignalsFeed signals={data.signals} closedTrades={data.closedTrades} />
       </div>
 
       {loadingData && (
