@@ -8,9 +8,11 @@ import PositionsTable from "./components/PositionsTable.jsx";
 import SignalsFeed from "./components/SignalsFeed.jsx";
 import PortfolioAllocation from "./components/PortfolioAllocation.jsx";
 import MonthlyPerformance from "./components/MonthlyPerformance.jsx";
+import BacktestPage from "./components/BacktestPage.jsx";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
+  const [view, setView] = useState("dashboard"); // "dashboard" | "backtest"
   const [data, setData] = useState({
     snapshots: [],
     openTrades: [],
@@ -69,25 +71,33 @@ export default function App() {
         strategyLabel="ma-crossover"
         lastCheck={latestSnapshot?.created_at}
         onSignOut={() => supabase.auth.signOut()}
+        view={view}
+        onViewChange={setView}
       />
 
-      <SummaryCards
-        latestSnapshot={latestSnapshot}
-        previousSnapshot={previousSnapshot}
-        openPositionsCount={data.openTrades.length}
-      />
+      {view === "backtest" ? (
+        <BacktestPage />
+      ) : (
+        <>
+          <SummaryCards
+            latestSnapshot={latestSnapshot}
+            previousSnapshot={previousSnapshot}
+            openPositionsCount={data.openTrades.length}
+          />
 
-      <EquityChart snapshots={data.snapshots} />
+          <EquityChart snapshots={data.snapshots} />
 
-      <div style={{ display: "flex", gap: 12, padding: "20px 24px 0 24px", flexWrap: "wrap" }}>
-        <PortfolioAllocation openTrades={data.openTrades} />
-        <MonthlyPerformance snapshots={data.snapshots} />
-      </div>
+          <div style={{ display: "flex", gap: 12, padding: "20px 24px 0 24px", flexWrap: "wrap" }}>
+            <PortfolioAllocation openTrades={data.openTrades} />
+            <MonthlyPerformance snapshots={data.snapshots} />
+          </div>
 
-      <div style={{ display: "flex", gap: 12, padding: "20px 24px 24px 24px", flexWrap: "wrap" }}>
-        <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} />
-        <SignalsFeed signals={data.signals} closedTrades={data.closedTrades} />
-      </div>
+          <div style={{ display: "flex", gap: 12, padding: "20px 24px 24px 24px", flexWrap: "wrap" }}>
+            <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} />
+            <SignalsFeed signals={data.signals} closedTrades={data.closedTrades} />
+          </div>
+        </>
+      )}
 
       {loadingData && (
         <div style={{ position: "fixed", bottom: 16, right: 16, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-faint)" }}>

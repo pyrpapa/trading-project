@@ -9,7 +9,7 @@ function timeAgo(dateStr) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-export default function StatusBar({ mode, strategyLabel, lastCheck, onSignOut }) {
+export default function StatusBar({ mode, strategyLabel, lastCheck, onSignOut, view, onViewChange }) {
   const isStale = !lastCheck || Date.now() - new Date(lastCheck).getTime() > 1000 * 60 * 60 * 30; // >30h
 
   return (
@@ -43,6 +43,13 @@ export default function StatusBar({ mode, strategyLabel, lastCheck, onSignOut })
         <span style={{ color: "var(--text-muted)" }}>
           last check: {timeAgo(lastCheck)}
         </span>
+        {onViewChange && (
+          <>
+            <span style={{ color: "var(--border-bright)" }}>·</span>
+            <NavTab active={view === "dashboard"} onClick={() => onViewChange("dashboard")}>dashboard</NavTab>
+            <NavTab active={view === "backtest"} onClick={() => onViewChange("backtest")}>backtest</NavTab>
+          </>
+        )}
       </div>
       <button
         onClick={onSignOut}
@@ -59,5 +66,25 @@ export default function StatusBar({ mode, strategyLabel, lastCheck, onSignOut })
         sign out
       </button>
     </div>
+  );
+}
+
+function NavTab({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: "none",
+        border: "none",
+        padding: 0,
+        color: active ? "var(--accent)" : "var(--text-muted)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 13,
+        cursor: "pointer",
+        textDecoration: active ? "underline" : "none",
+      }}
+    >
+      {children}
+    </button>
   );
 }
