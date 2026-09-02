@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { load as yamlLoad } from "js-yaml";
 import { supabase } from "../lib/supabaseClient.js";
 import { Panel, Table, Empty, fmtPct, pnlColor } from "./PositionsTable.jsx";
 import TickerPicker from "./TickerPicker.jsx";
+
+const REPO = "pyrpapa/trading-project";
 
 const BASE_CONFIGS = [
   { value: "config/strategy_master.yaml", label: "strategy_master.yaml (live default)" },
@@ -10,121 +13,91 @@ const BASE_CONFIGS = [
 ];
 
 // Curated fields, grouped to match config/strategy_master.yaml's own
-// section layout (watchlist/backtest, entry, exit, risk, pyramiding,
-// trailing_stop) -- this is meant to cover everything someone would
-// normally want to tune without touching YAML at all. "select" fields
-// get a blank "(use base config's)" first option so leaving a field
-// alone always means "inherit," same as every other field type here.
-// "boolselect" is the same idea for on/off knobs -- a real HTML
-// checkbox has no natural "unset" state, so booleans get a 3-way
-// select instead (blank / Enabled / Disabled) to keep that same
-// "blank = inherit" rule everywhere in this form.
+// section layout. Each field carries its own `help` text inline now
+// (shown right under the input, not in a separate section) and a
+// dotted `path` used both to pre-fill the field from the chosen base
+// config and to write it back into the merged config server-side.
 //
-// Each `key` maps 1:1 to an entry in api/backtest.js's FIELD_PATHS --
-// keep the two in sync if you add/rename a field here.
+// This same key->path mapping is duplicated in api/backtest.js's
+// FIELD_PATHS -- keep the two in sync if you add/rename a field here.
 const FIELD_GROUPS = [
   {
     title: "General",
-    // watchlist is deliberately NOT here -- it gets the dedicated
-    // TickerPicker UI instead of a generic field, but keeps its
-    // FIELD_HELP entry below and its own row in the reference key.
     fields: [
-      { key: "start_date", label: "Start date", type: "date" },
-      { key: "end_date", label: "End date", type: "date" },
-      { key: "starting_cash", label: "Starting cash ($)", type: "number" },
+      { key: "start_date", label: "Start date", path: "backtest.start_date", type: "date", help: "First day of the simulated period." },
+      { key: "end_date", label: "End date", path: "backtest.end_date", type: "date", help: "Last day of the simulated period." },
+      { key: "starting_cash", label: "Starting cash ($)", path: "backtest.starting_cash", type: "number", help: "Simulated account balance on day one." },
     ],
   },
   {
     title: "Entry",
     fields: [
-      { key: "entry_type", label: "Entry rule", type: "select", options: ["ma_crossover", "donchian_breakout", "always"] },
-      { key: "ma_period", label: "MA period (days)", type: "number" },
-      { key: "breakout_period", label: "Donchian breakout period (days)", type: "number" },
-      { key: "volume_confirmation", label: "Require volume confirmation", type: "boolselect" },
-      { key: "volume_ma_period", label: "Volume MA period (days)", type: "number" },
-      { key: "regime_filter_period", label: "Regime filter period (days, 0 = off)", type: "number" },
-      { key: "choppiness_filter_period", label: "Choppiness filter period (days)", type: "number" },
-      { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", type: "number", step: "1" },
+      { key: "entry_type", label: "Entry rule", path: "entry.type", type: "select", options: ["ma_crossover", "donchian_breakout", "always"], help: "ma_crossover buys the first day price closes above its MA; donchian_breakout buys any day price closes above its N-day high; always buys back in immediately after any exit (isolates whether entry timing itself adds value)." },
+      { key: "ma_period", label: "MA period (days)", path: "entry.ma_period", type: "number", help: "Moving-average length for the ma_crossover entry rule (and the ma_crossover trend-exit rule, if selected)." },
+      { key: "breakout_period", label: "Donchian breakout period (days)", path: "entry.breakout_period", type: "number", help: "Lookback window for the donchian_breakout entry rule's N-day high." },
+      { key: "volume_confirmation", label: "Require volume confirmation", path: "entry.volume_confirmation", type: "boolselect", help: "If enabled, an entry also requires that day's volume to be above its own moving average." },
+      { key: "volume_ma_period", label: "Volume MA period (days)", path: "entry.volume_ma_period", type: "number", help: "Moving-average length for the volume-confirmation check above." },
+      { key: "regime_filter_period", label: "Regime filter period (days, 0 = off)", path: "entry.regime_filter_period", type: "number", help: "A much slower MA the fast entry signal must also be above (a macro trend filter). 0 disables it." },
+      { key: "choppiness_filter_period", label: "Choppiness filter period (days)", path: "entry.choppiness_filter_period", type: "number", help: "Lookback window for the choppiness index (how efficiently price is trending vs. chopping sideways)." },
+      { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", path: "entry.choppiness_threshold", type: "number", step: "1", help: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter." },
     ],
   },
   {
     title: "Exit",
     fields: [
-      { key: "exit_type", label: "Trend-exit rule", type: "select", options: ["ma_crossover", "donchian_low"] },
-      { key: "ma_exit", label: "Trend-exit enabled", type: "boolselect" },
-      { key: "exit_breakout_period", label: "Donchian exit period (days)", type: "number" },
-      { key: "stop_loss_pct", label: "Stop-loss (%)", type: "number", step: "0.5" },
-      { key: "take_profit_pct", label: "Take-profit (%, blank = disabled)", type: "number", step: "0.5" },
+      { key: "exit_type", label: "Trend-exit rule", path: "exit.type", type: "select", options: ["ma_crossover", "donchian_low"], help: "ma_crossover exits the first day price closes back below its MA; donchian_low exits the first day price closes below its N-day low (more tolerant of pullbacks)." },
+      { key: "ma_exit", label: "Trend-exit enabled", path: "exit.ma_exit", type: "boolselect", help: "Master on/off switch for the trend-exit rule above — disabled means only the stop-loss/take-profit can close a position." },
+      { key: "exit_breakout_period", label: "Donchian exit period (days)", path: "exit.exit_breakout_period", type: "number", help: "Lookback window for the donchian_low trend-exit rule's N-day low." },
+      { key: "stop_loss_pct", label: "Stop-loss (%)", path: "exit.stop_loss_pct", type: "number", step: "0.5", help: "Flat-percent stop-loss below entry price. Ignored if sizing method is atr_unit (that mode uses stop distance × ATR instead)." },
+      { key: "take_profit_pct", label: "Take-profit (%, blank = disabled)", path: "exit.take_profit_pct", type: "number", step: "0.5", help: "Flat-percent take-profit above entry price. Blank means only stops and the trend-exit rule can close a winner." },
     ],
   },
   {
     title: "Risk & sizing",
     fields: [
-      { key: "sizing_method", label: "Sizing method", type: "select", options: ["pct", "atr_unit"] },
-      { key: "atr_period", label: "ATR period (days)", type: "number" },
-      { key: "risk_pct_per_unit", label: "Risk per unit (% of equity)", type: "number", step: "0.1" },
-      { key: "stop_atr_multiple", label: "Stop distance (× ATR/N)", type: "number", step: "0.1" },
-      { key: "max_position_pct", label: "Max position size (% of equity)", type: "number", step: "1" },
-      { key: "max_invested_pct", label: "Max total invested (% of equity)", type: "number", step: "1" },
+      { key: "sizing_method", label: "Sizing method", path: "risk.sizing_method", type: "select", options: ["pct", "atr_unit"], help: "pct sizes every position the same % of equity. atr_unit (Turtle-style) sizes by volatility — calmer tickers get bigger positions for the same dollar risk — and is required for pyramiding." },
+      { key: "atr_period", label: "ATR period (days)", path: "risk.atr_period", type: "number", help: "Lookback window for ATR (\"N\"), the volatility measure atr_unit sizing and ATR-based stops are built on." },
+      { key: "risk_pct_per_unit", label: "Risk per unit (% of equity)", path: "risk.risk_pct_per_unit", type: "number", step: "0.1", help: "% of equity risked on one unit, atr_unit sizing only — position size = (this % of equity) ÷ (stop distance in $)." },
+      { key: "stop_atr_multiple", label: "Stop distance (× ATR/N)", path: "risk.stop_atr_multiple", type: "number", step: "0.1", help: "Stop-loss distance from entry, in multiples of ATR/N, atr_unit sizing only." },
+      { key: "max_position_pct", label: "Max position size (% of equity)", path: "risk.max_position_pct", type: "number", step: "1", help: "Hard cap on any single ticker's position size, regardless of what the sizing formula would otherwise produce." },
+      { key: "max_invested_pct", label: "Max total invested (% of equity)", path: "risk.max_invested_pct", type: "number", step: "1", help: "Hard cap on total capital deployed across all open positions at once." },
     ],
   },
   {
     title: "Pyramiding",
     fields: [
-      { key: "pyramiding_enabled", label: "Pyramiding enabled", type: "boolselect" },
-      { key: "pyramiding_unit_interval_n", label: "Add unit every N moved further (× ATR)", type: "number", step: "0.1" },
-      { key: "pyramiding_max_units", label: "Max units per position", type: "number" },
+      { key: "pyramiding_enabled", label: "Pyramiding enabled", path: "risk.pyramiding.enabled", type: "boolselect", help: "Allows adding more units to an already-open, winning position as price moves further in its favor. Requires atr_unit sizing." },
+      { key: "pyramiding_unit_interval_n", label: "Add unit every N moved further (× ATR)", path: "risk.pyramiding.unit_interval_n", type: "number", step: "0.1", help: "Price must move this many multiples of ATR/N further in the position's favor (since the LAST unit's own entry) before another unit is added." },
+      { key: "pyramiding_max_units", label: "Max units per position", path: "risk.pyramiding.max_units", type: "number", help: "Ceiling on how many units one position can stack up to." },
     ],
   },
   {
     title: "Trailing stop",
     fields: [
-      { key: "trailing_stop_enabled", label: "Trailing stop enabled", type: "boolselect" },
-      { key: "trailing_stop_atr_multiple", label: "Trailing distance (× ATR/N)", type: "number", step: "0.1" },
+      { key: "trailing_stop_enabled", label: "Trailing stop enabled", path: "risk.trailing_stop.enabled", type: "boolselect", help: "Adds a second stop that trails up behind the position's peak price (never down), on top of the regular stop-loss — whichever stop is tighter wins." },
+      { key: "trailing_stop_atr_multiple", label: "Trailing distance (× ATR/N)", path: "risk.trailing_stop.atr_multiple", type: "number", step: "0.1", help: "How far behind the peak price the trailing stop sits, in multiples of ATR/N." },
     ],
   },
 ];
-
-// Plain-language definitions for the reference key at the bottom.
-// Written to match this project's own explanations in strategy/rules.py
-// and config/strategy_master.yaml's comments, not reworded from
-// scratch, so they stay accurate to what the code actually does.
-const FIELD_HELP = {
-  watchlist: "Tickers the backtest considers. Comma-separated, e.g. \"SPXL, TQQQ, SOXL\".",
-  start_date: "First day of the simulated period.",
-  end_date: "Last day of the simulated period.",
-  starting_cash: "Simulated account balance on day one.",
-  entry_type: "\"ma_crossover\" buys the first day price closes above its MA; \"donchian_breakout\" buys any day price closes above its N-day high; \"always\" buys back in immediately after any exit (isolates whether the entry timing itself adds value).",
-  ma_period: "Moving-average length used by the ma_crossover entry rule (and the ma_crossover trend-exit rule, if selected).",
-  breakout_period: "Lookback window for the donchian_breakout entry rule's N-day high.",
-  volume_confirmation: "If enabled, an entry also requires that day's volume to be above its own moving average.",
-  volume_ma_period: "Moving-average length for the volume-confirmation check above.",
-  regime_filter_period: "A much slower MA the fast entry signal must also be above (a macro trend filter). 0 disables it.",
-  choppiness_filter_period: "Lookback window for the choppiness index (how efficiently price is trending vs. chopping sideways).",
-  choppiness_threshold: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter.",
-  exit_type: "\"ma_crossover\" exits the first day price closes back below its MA; \"donchian_low\" exits the first day price closes below its N-day low (more tolerant of pullbacks).",
-  ma_exit: "Master on/off switch for the trend-exit rule above -- disabled means only the stop-loss/take-profit can close a position.",
-  exit_breakout_period: "Lookback window for the donchian_low trend-exit rule's N-day low.",
-  stop_loss_pct: "Flat-percent stop-loss below entry price. Ignored if sizing_method is atr_unit (that mode uses stop_atr_multiple instead).",
-  take_profit_pct: "Flat-percent take-profit above entry price. Blank/disabled means only stops and the trend-exit rule can close a winner.",
-  sizing_method: "\"pct\" sizes every position the same % of equity. \"atr_unit\" (Turtle-style) sizes by volatility -- calmer tickers get bigger positions for the same dollar risk -- and is required for pyramiding.",
-  atr_period: "Lookback window for ATR (\"N\"), the volatility measure atr_unit sizing and ATR-based stops are built on.",
-  risk_pct_per_unit: "% of equity risked on one unit, atr_unit sizing only -- position size = (this % of equity) ÷ (stop distance in $).",
-  stop_atr_multiple: "Stop-loss distance from entry, in multiples of ATR/N, atr_unit sizing only.",
-  max_position_pct: "Hard cap on any single ticker's position size, as a % of equity, regardless of what the sizing formula would otherwise produce.",
-  max_invested_pct: "Hard cap on total capital deployed across all open positions at once, as a % of equity.",
-  pyramiding_enabled: "Allows adding more units to an already-open, winning position as price moves further in its favor. Requires atr_unit sizing.",
-  pyramiding_unit_interval_n: "Price must move this many multiples of ATR/N further in the position's favor (since the LAST unit's own entry) before another unit is added.",
-  pyramiding_max_units: "Ceiling on how many units one position can stack up to.",
-  trailing_stop_enabled: "Adds a second stop that trails up behind the position's peak price (never down), on top of the regular stop-loss -- whichever stop is tighter wins.",
-  trailing_stop_atr_multiple: "How far behind the peak price the trailing stop sits, in multiples of ATR/N.",
-};
+const ALL_FIELDS = FIELD_GROUPS.flatMap((g) => g.fields);
 
 const METRIC_COLS = ["total_return_pct", "max_drawdown_pct", "calmar_ratio", "sortino_ratio", "alpha_pct", "n_trades"];
 const METRIC_LABELS = {
   total_return_pct: "Return", max_drawdown_pct: "Max DD", calmar_ratio: "Calmar",
   sortino_ratio: "Sortino", alpha_pct: "Alpha", n_trades: "Trades",
 };
+
+function getPath(obj, dottedPath) {
+  return dottedPath.split(".").reduce((node, key) => (node == null ? undefined : node[key]), obj);
+}
+
+// Parsed-YAML value -> the string an <input>/<select> wants. null/undefined
+// become "" (an empty field), which is exactly right for the nullable
+// fields (take_profit_pct, choppiness_threshold) and harmless for the rest.
+function toFieldString(value) {
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
 
 export default function BacktestPage() {
   const [baseConfig, setBaseConfig] = useState(BASE_CONFIGS[0].value);
@@ -141,6 +114,43 @@ export default function BacktestPage() {
   const [result, setResult] = useState(null); // "submitted" | error string | null
   const [recentRuns, setRecentRuns] = useState([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
+  const [loadingBase, setLoadingBase] = useState(false);
+  const [baseError, setBaseError] = useState(null);
+
+  const activeBasePath = baseConfig === "__custom__" ? customPath : baseConfig;
+
+  // Pre-fills the whole form from whatever base config is currently
+  // selected -- fetched fresh (client-side, GitHub's raw content API
+  // allows cross-origin reads on public repos) rather than bundling a
+  // copy, same reasoning as api/backtest.js's own fetch.
+  const loadBaseConfig = useCallback(async (path) => {
+    if (!path) return;
+    setLoadingBase(true);
+    setBaseError(null);
+    try {
+      const resp = await fetch(`https://raw.githubusercontent.com/${REPO}/main/${path}`);
+      if (!resp.ok) throw new Error(`couldn't fetch ${path} (${resp.status})`);
+      const cfg = yamlLoad(await resp.text());
+      if (typeof cfg !== "object" || cfg === null) throw new Error(`${path} didn't parse into a config`);
+
+      const newFields = {};
+      for (const f of ALL_FIELDS) newFields[f.key] = toFieldString(getPath(cfg, f.path));
+      setFields(newFields);
+
+      const watchlist = Array.isArray(cfg.watchlist) ? cfg.watchlist : [];
+      const known = new Set(watchlist.filter((t) => KNOWN_TICKERS.has(t)));
+      setSelectedTickers([...known]);
+      setCustomTickerText(watchlist.filter((t) => !known.has(t)).join(", "));
+    } catch (e) {
+      setBaseError(String(e.message || e));
+    } finally {
+      setLoadingBase(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (baseConfig !== "__custom__") loadBaseConfig(baseConfig);
+  }, [baseConfig, loadBaseConfig]);
 
   function watchlistValue() {
     const custom = customTickerText.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -159,22 +169,15 @@ export default function BacktestPage() {
   }
 
   function coerceField(f, raw) {
-    if (raw === undefined || raw === "") return undefined; // untouched -- inherit from base config
+    if (raw === undefined || raw === "") return null; // blank means null in the config (take_profit_pct, choppiness_threshold)
     if (f.type === "number") return Number(raw);
-    if (f.type === "boolselect") return raw === "true" ? true : raw === "false" ? false : undefined;
+    if (f.type === "boolselect") return raw === "true";
     return raw; // text, date, select
   }
 
   function buildFormFields() {
-    const formFields = {};
-    const watchlist = watchlistValue();
-    if (watchlist.length > 0) formFields.watchlist = watchlist;
-    for (const group of FIELD_GROUPS) {
-      for (const f of group.fields) {
-        const value = coerceField(f, fields[f.key]);
-        if (value !== undefined) formFields[f.key] = value;
-      }
-    }
+    const formFields = { watchlist: watchlistValue() };
+    for (const f of ALL_FIELDS) formFields[f.key] = coerceField(f, fields[f.key]);
     return formFields;
   }
 
@@ -194,7 +197,7 @@ export default function BacktestPage() {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
       body: JSON.stringify({
-        baseConfig: baseConfig === "__custom__" ? customPath : baseConfig,
+        baseConfig: activeBasePath,
         formFields: buildFormFields(),
         advancedYaml,
         runLabel: strategyName,
@@ -236,116 +239,105 @@ export default function BacktestPage() {
 
   return (
     <div style={{ padding: "20px 24px 24px 24px" }}>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <Panel title="Run a custom backtest">
-          <form onSubmit={handleSubmit}>
-            <label style={labelStyle}>Base config</label>
-            <select value={baseConfig} onChange={(e) => setBaseConfig(e.target.value)} style={inputStyle}>
-              {BASE_CONFIGS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-            {baseConfig === "__custom__" && (
-              <input
-                type="text"
-                value={customPath}
-                onChange={(e) => setCustomPath(e.target.value)}
-                placeholder="config/strategy_v40_tight_stops.yaml"
-                style={{ ...inputStyle, marginTop: 8 }}
-              />
-            )}
-
-            {FIELD_GROUPS.map((group) => (
-              <div key={group.title} style={{ marginTop: 20 }}>
-                <div style={groupTitleStyle}>{group.title}</div>
-                {group.title === "General" && (
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={labelStyle}>Watchlist</label>
-                    <TickerPicker
-                      selected={selectedTickers}
-                      onChange={setSelectedTickers}
-                      customText={customTickerText}
-                      onCustomTextChange={setCustomTickerText}
-                    />
-                  </div>
-                )}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 16px" }}>
-                  {group.fields.map((f) => (
-                    <div key={f.key}>
-                      <label style={labelStyle}>{f.label}</label>
-                      {f.type === "select" || f.type === "boolselect" ? (
-                        <select
-                          value={fields[f.key] ?? ""}
-                          onChange={(e) => updateField(f.key, e.target.value)}
-                          style={inputStyle}
-                        >
-                          <option value="">(use base config's)</option>
-                          {f.type === "boolselect"
-                            ? [<option key="true" value="true">Enabled</option>, <option key="false" value="false">Disabled</option>]
-                            : f.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      ) : (
-                        <input
-                          type={f.type}
-                          step={f.step}
-                          placeholder={f.placeholder}
-                          value={fields[f.key] ?? ""}
-                          onChange={(e) => updateField(f.key, e.target.value)}
-                          style={inputStyle}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-
-            <label style={{ ...labelStyle, marginTop: 20 }}>
-              Advanced — anything not covered above, as YAML merged on top of everything else
-            </label>
-            <textarea
-              value={advancedYaml}
-              onChange={(e) => setAdvancedYaml(e.target.value)}
-              rows={4}
-              placeholder={"e.g.\nrisk:\n  correlation_breaker:\n    enabled: true"}
-              style={{ ...inputStyle, fontFamily: "var(--font-mono)", fontSize: 12, resize: "vertical" }}
-            />
-
-            <label style={{ ...labelStyle, marginTop: 16 }}>
-              Strategy name — labels this run in the results below, and names the file if you export
-            </label>
+      <Panel
+        title="Run a custom backtest"
+        action={
+          <button type="button" onClick={() => loadBaseConfig(activeBasePath)} disabled={loadingBase} style={refreshButtonStyle}>
+            {loadingBase ? "Loading…" : "Reload from base config"}
+          </button>
+        }
+      >
+        <form onSubmit={handleSubmit}>
+          <label style={labelStyle}>Base config</label>
+          <select value={baseConfig} onChange={(e) => setBaseConfig(e.target.value)} style={inputStyle}>
+            {BASE_CONFIGS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
+          {baseConfig === "__custom__" && (
             <input
               type="text"
-              value={strategyName}
-              onChange={(e) => setStrategyName(e.target.value)}
-              placeholder="e.g. tighter-stop-test"
-              style={inputStyle}
+              value={customPath}
+              onChange={(e) => setCustomPath(e.target.value)}
+              onBlur={() => loadBaseConfig(customPath)}
+              placeholder="config/strategy_v40_tight_stops.yaml — press Tab/click away to load"
+              style={{ ...inputStyle, marginTop: 8 }}
             />
+          )}
+          {baseError && <div style={{ color: "var(--negative)", fontSize: 12, marginTop: 6 }}>{baseError}</div>}
+          <div style={{ color: "var(--text-faint)", fontSize: 11, marginTop: 6 }}>
+            Every field below is pre-filled from this config — edit whatever you want to change, leave the rest as-is.
+          </div>
 
-            <div style={{ display: "flex", gap: 10 }}>
-              <button type="submit" disabled={submitting} style={{ ...submitButtonStyle, width: "auto", flex: 1 }}>
-                {submitting ? "Submitting…" : "Run backtest"}
-              </button>
-              <button
-                type="button"
-                onClick={handleExport}
-                disabled={exporting}
-                style={{ ...submitButtonStyle, width: "auto", flex: 1, background: "var(--surface-raised)", color: "var(--text-primary)", border: "1px solid var(--border)" }}
-              >
-                {exporting ? "Exporting…" : "Export config (.yaml)"}
-              </button>
+          <div style={{ marginTop: 20 }}>
+            <div style={groupTitleStyle}>General</div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>Watchlist</label>
+              <TickerPicker
+                selected={selectedTickers}
+                onChange={setSelectedTickers}
+                customText={customTickerText}
+                onCustomTextChange={setCustomTickerText}
+              />
+              <div style={helpStyle}>Tickers the backtest considers.</div>
             </div>
+            <FieldGrid fields={FIELD_GROUPS[0].fields} values={fields} onChange={updateField} />
+          </div>
 
-            {result === "submitted" && (
-              <div style={{ color: "var(--positive)", fontSize: 13, marginTop: 12 }}>
-                Submitted — this runs in GitHub Actions and can take a minute or more depending on the
-                date range. Click "Check for results" once it's had time to finish.
-              </div>
-            )}
-            {result && result !== "submitted" && (
-              <div style={{ color: "var(--negative)", fontSize: 13, marginTop: 12 }}>Failed: {result}</div>
-            )}
-          </form>
-        </Panel>
+          {FIELD_GROUPS.slice(1).map((group) => (
+            <div key={group.title} style={{ marginTop: 20 }}>
+              <div style={groupTitleStyle}>{group.title}</div>
+              <FieldGrid fields={group.fields} values={fields} onChange={updateField} />
+            </div>
+          ))}
 
+          <label style={{ ...labelStyle, marginTop: 20 }}>
+            Advanced — anything not covered above, as YAML merged on top of everything else
+          </label>
+          <textarea
+            value={advancedYaml}
+            onChange={(e) => setAdvancedYaml(e.target.value)}
+            rows={4}
+            placeholder={"e.g.\nrisk:\n  correlation_breaker:\n    enabled: true"}
+            style={{ ...inputStyle, fontFamily: "var(--font-mono)", fontSize: 12, resize: "vertical" }}
+          />
+
+          <label style={{ ...labelStyle, marginTop: 16 }}>
+            Strategy name — labels this run below, and names the file if you export
+          </label>
+          <input
+            type="text"
+            value={strategyName}
+            onChange={(e) => setStrategyName(e.target.value)}
+            placeholder="e.g. tighter-stop-test"
+            style={inputStyle}
+          />
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="submit" disabled={submitting} style={{ ...submitButtonStyle, width: "auto", flex: 1 }}>
+              {submitting ? "Submitting…" : "Run backtest"}
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={exporting}
+              style={{ ...submitButtonStyle, width: "auto", flex: 1, background: "var(--surface-raised)", color: "var(--text-primary)", border: "1px solid var(--border)" }}
+            >
+              {exporting ? "Exporting…" : "Export config (.yaml)"}
+            </button>
+          </div>
+
+          {result === "submitted" && (
+            <div style={{ color: "var(--positive)", fontSize: 13, marginTop: 12 }}>
+              Submitted — this runs in GitHub Actions and can take a minute or more depending on the
+              date range. Click "Check for results" below once it's had time to finish.
+            </div>
+          )}
+          {result && result !== "submitted" && (
+            <div style={{ color: "var(--negative)", fontSize: 13, marginTop: 12 }}>Failed: {result}</div>
+          )}
+        </form>
+      </Panel>
+
+      <div style={{ marginTop: 12 }}>
         <Panel
           title="Recent backtest runs"
           action={<button onClick={loadRecentRuns} disabled={loadingRuns} style={refreshButtonStyle}>{loadingRuns ? "Loading…" : "Check for results"}</button>}
@@ -371,28 +363,61 @@ export default function BacktestPage() {
           )}
         </Panel>
       </div>
-
-      <div style={{ marginTop: 12 }}>
-        <Panel title="Field reference">
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "10px 24px" }}>
-            {[{ key: "watchlist", label: "Watchlist" }, ...FIELD_GROUPS.flatMap((g) => g.fields)].map((f) => (
-              <div key={f.key} style={{ fontSize: 12 }}>
-                <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>{f.label}</span>
-                <div style={{ color: "var(--text-muted)", marginTop: 2, lineHeight: 1.4 }}>{FIELD_HELP[f.key]}</div>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      </div>
     </div>
   );
 }
+
+function FieldGrid({ fields, values, onChange }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "14px 16px" }}>
+      {fields.map((f) => (
+        <div key={f.key}>
+          <label style={labelStyle}>{f.label}</label>
+          {f.type === "select" || f.type === "boolselect" ? (
+            <select value={values[f.key] ?? ""} onChange={(e) => onChange(f.key, e.target.value)} style={inputStyle}>
+              {f.type === "boolselect"
+                ? [<option key="true" value="true">Enabled</option>, <option key="false" value="false">Disabled</option>]
+                : f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ) : (
+            <input
+              type={f.type}
+              step={f.step}
+              value={values[f.key] ?? ""}
+              onChange={(e) => onChange(f.key, e.target.value)}
+              style={inputStyle}
+            />
+          )}
+          <div style={helpStyle}>{f.help}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Mirrors TickerPicker.jsx's own list -- used to split a loaded config's
+// watchlist between "matches a picker chip" (highlighted) and "not in
+// the curated list" (falls into the free-text custom field instead).
+const KNOWN_TICKERS = new Set([
+  "SPXL", "TQQQ", "SOXL", "FAS", "TNA", "TECL", "ERX", "TMF", "YINN", "DRN", "CURE",
+  "SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLU", "XLY", "XLP", "XLB", "XLRE",
+  "TLT", "AGG", "GLD", "SLV", "DBC", "VNQ", "VEA",
+  "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "AMD", "NFLX", "JPM", "V", "WMT", "DIS", "BA", "XOM", "UNH", "HD", "PG", "MA", "COST",
+  "BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "LINK-USD", "AVAX-USD", "LTC-USD", "ADA-USD", "DOT-USD", "UNI-USD", "BCH-USD", "FIL-USD", "RENDER-USD", "AAVE-USD", "CRV-USD", "LDO-USD",
+]);
 
 const labelStyle = {
   display: "block",
   fontSize: 12,
   color: "var(--text-muted)",
   marginBottom: 6,
+};
+
+const helpStyle = {
+  fontSize: 11,
+  color: "var(--text-faint)",
+  marginTop: 4,
+  lineHeight: 1.4,
 };
 
 const groupTitleStyle = {

@@ -6,6 +6,11 @@
 // of liquid large-caps so the picker is useful beyond just this
 // project's own history. Anything not listed can still be typed into
 // the "add custom ticker(s)" field below the grid.
+//
+// BacktestPage.jsx keeps its own flattened copy of this same list
+// (KNOWN_TICKERS) to split a loaded config's watchlist between "matches
+// a chip here" and "falls into the custom-text field" -- keep both in
+// sync if you add/remove a ticker.
 const TICKER_GROUPS = {
   "Leveraged ETFs": ["SPXL", "TQQQ", "SOXL", "FAS", "TNA", "TECL", "ERX", "TMF", "YINN", "DRN", "CURE"],
   "Broad market / sector ETFs": ["SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLU", "XLY", "XLP", "XLB", "XLRE"],
