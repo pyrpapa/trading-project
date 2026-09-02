@@ -4,20 +4,11 @@ import { supabase } from "../lib/supabaseClient.js";
 import { Panel, Table, Empty, fmtPct, pnlColor } from "./PositionsTable.jsx";
 import TickerPicker from "./TickerPicker.jsx";
 
+// Only used for pre-filling the form client-side (raw.githubusercontent.com
+// has permissive CORS for public repos) -- the actual backtest run goes
+// through api/run_backtest.py, a Vercel Python function with direct
+// filesystem access to config/*.yaml, so it doesn't need this fetch at all.
 const REPO = "pyrpapa/trading-project";
-
-// Matches storage/supabase_client.py's SupabaseStore.REPORTS_BUCKET
-// exactly -- keep the two in sync. No DB lookup needed for the report
-// URL: report.py always names the file f"{safe_label}_report.html"
-// (spaces -> underscores) and upload_report uses that same basename as
-// the object name, so the public URL is fully derivable from a
-// run_label alone once the bucket is public.
-const REPORTS_BUCKET = "backtest-reports";
-
-function reportUrl(runLabel) {
-  const safeLabel = (runLabel || "").replace(/ /g, "_");
-  return `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${REPORTS_BUCKET}/${safeLabel}_report.html`;
-}
 
 const BASE_CONFIGS = [
   { value: "config/strategy_master.yaml", label: "strategy_master.yaml (live default)", shortName: "master" },
@@ -44,7 +35,7 @@ const BASE_CONFIGS = [
 // strategy/rules.py / backtest/engine.py -- see each field's own `help`
 // for the plain-English version of why.
 //
-// This same key->path mapping is duplicated in api/backtest.js's
+// This same key->path mapping is duplicated in api/run_backtest.py's
 // FIELD_PATHS -- keep the two in sync if you add/rename a field here.
 const FIELD_GROUPS = [
   {
@@ -142,14 +133,13 @@ export default function BacktestPage() {
   const [strategyName, setStrategyName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [result, setResult] = useState(null); // "submitted" | error string | null
-  // The pair of run_labels just dispatched (custom + its master
-  // baseline) -- results only ever shows THIS session's pair, not a
-  // running history. Cleared back to null on a fresh submit so a stale
-  // pair's results don't linger next to a new one.
-  const [activeRuns, setActiveRuns] = useState(null); // { label, baselineLabel, compareName } | null
-  const [runs, setRuns] = useState([]);
-  const [loadingRuns, setLoadingRuns] = useState(false);
+  const [error, setError] = useState(null);
+  // api/run_backtest.py runs synchronously and returns metrics directly
+  // -- no dispatch-and-poll dance, so this is just the last response,
+  // not a running history. { custom: {run_label, metrics, report_url},
+  // compare: {...} } | null. Cleared on every new submit so a stale
+  // pair's results don't linger next to a fresh one.
+  const [results, setResults] = useState(null);
   const [loadingBase, setLoadingBase] = useState(false);
   const [baseError, setBaseError] = useState(null);
 
@@ -159,9 +149,10 @@ export default function BacktestPage() {
     ?? (activeComparePath.split("/").pop()?.replace(/\.ya?ml$/, "") || "compare");
 
   // Pre-fills the whole form from whatever base config is currently
-  // selected -- fetched fresh (client-side, GitHub's raw content API
-  // allows cross-origin reads on public repos) rather than bundling a
-  // copy, same reasoning as api/backtest.js's own fetch.
+  // selected -- fetched fresh, client-side, from GitHub's raw content
+  // API (permissive CORS on public repos). Purely a form-prefill
+  // convenience; the actual run reads config/*.yaml directly off disk
+  // in api/run_backtest.py, no fetch involved there.
   const loadBaseConfig = useCallback(async (path) => {
     if (!path) return;
     setLoadingBase(true);
@@ -194,18 +185,6 @@ export default function BacktestPage() {
   function watchlistValue() {
     const custom = customTickerText.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
     return [...new Set([...selectedTickers, ...custom])];
-  }
-
-  async function checkResults() {
-    if (!activeRuns) return;
-    setLoadingRuns(true);
-    const { data } = await supabase
-      .from("backtest_runs")
-      .select("*")
-      .in("run_label", [activeRuns.label, activeRuns.baselineLabel])
-      .order("created_at", { ascending: false });
-    setRuns(data ?? []);
-    setLoadingRuns(false);
   }
 
   function updateField(key, value) {
@@ -245,59 +224,61 @@ export default function BacktestPage() {
     URL.revokeObjectURL(url);
   }
 
-  async function callBacktestApi(extra) {
+  // api/run_backtest.py runs synchronously (a Vercel Python function with
+  // direct repo access, not a GitHub Actions dispatch) and returns
+  // metrics directly -- one request does both the custom run and its
+  // comparison baseline, no separate dispatch-then-poll steps anymore.
+  async function callRunBacktestApi(body) {
     const { data: { session } } = await supabase.auth.getSession();
-    const resp = await fetch("/api/backtest", {
+    const resp = await fetch("/api/run_backtest", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` },
-      body: JSON.stringify({
-        baseConfig: activeBasePath,
-        formFields: buildFormFields(),
-        advancedYaml,
-        runLabel: strategyName,
-        ...extra,
-      }),
+      body: JSON.stringify(body),
     });
-    const body = await resp.json();
-    if (!resp.ok) throw new Error(body.error || `HTTP ${resp.status}`);
-    return body;
+    const responseBody = await resp.json();
+    if (!resp.ok) throw new Error(responseBody.error || `HTTP ${resp.status}`);
+    return responseBody;
+  }
+
+  function customSpec(runLabel) {
+    return { baseConfig: activeBasePath, formFields: buildFormFields(), advancedYaml, runLabel };
+  }
+
+  function compareSpec(runLabel) {
+    // Same start/end/starting-cash as the custom run (an apples-to-apples
+    // window and account size), but otherwise the comparison config
+    // completely unmodified -- none of the custom form's other fields
+    // carry over here, on purpose.
+    return {
+      baseConfig: activeComparePath,
+      runLabel,
+      formFields: {
+        start_date: fields.start_date || undefined,
+        end_date: fields.end_date || undefined,
+        starting_cash: fields.starting_cash ? Number(fields.starting_cash) : undefined,
+      },
+    };
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
+    if (!activeComparePath) {
+      setError("Pick a comparison config, or enter a path for it, before running.");
+      return;
+    }
     setSubmitting(true);
-    setResult(null);
-    setRuns([]);
+    setError(null);
+    setResults(null);
     try {
-      if (!activeComparePath) throw new Error("Pick a comparison config, or enter a path for it, before running.");
-
       const label = strategyName || `custom-${Date.now()}`;
       const baselineLabel = `${label}-vs-${compareLabelSuffix}`;
-
-      await callBacktestApi({ runLabel: label });
-
-      // Comparison baseline: same start/end/starting-cash as the custom
-      // run above (an apples-to-apples window and account size), but
-      // otherwise the comparison config completely unmodified -- none of
-      // the custom form's other fields carry over here, on purpose.
-      await callBacktestApi({
-        runLabel: baselineLabel,
-        baseConfig: activeComparePath,
-        formFields: {
-          start_date: fields.start_date || undefined,
-          end_date: fields.end_date || undefined,
-          starting_cash: fields.starting_cash ? Number(fields.starting_cash) : undefined,
-        },
-        advancedYaml: "",
-      });
-
-      // Snapshot compareLabelSuffix at submit time, not read live later --
-      // the dropdown could change before "Check for results" is clicked,
-      // and the label/results panel should describe what actually ran.
-      setActiveRuns({ label, baselineLabel, compareName: compareLabelSuffix });
-      setResult("submitted");
+      const body = await callRunBacktestApi({ custom: customSpec(label), compare: compareSpec(baselineLabel) });
+      // compareLabelSuffix is snapshotted here, not read live in the
+      // render -- the dropdown could change before this response lands,
+      // and the results panel should describe what actually ran.
+      setResults({ custom: body.custom, compare: body.compare, compareName: compareLabelSuffix });
     } catch (err) {
-      setResult(String(err.message || err));
+      setError(String(err.message || err));
     } finally {
       setSubmitting(false);
     }
@@ -305,13 +286,14 @@ export default function BacktestPage() {
 
   async function handleExport() {
     setExporting(true);
-    setResult(null);
+    setError(null);
     try {
-      const body = await callBacktestApi({ exportOnly: true });
-      const filename = `${(strategyName || "custom-strategy").replace(/[^a-z0-9_-]+/gi, "-")}.yaml`;
-      downloadYaml(body.configYaml, filename);
+      const label = strategyName || "custom-strategy";
+      const body = await callRunBacktestApi({ custom: customSpec(label), exportOnly: true });
+      const filename = `${label.replace(/[^a-z0-9_-]+/gi, "-")}.yaml`;
+      downloadYaml(body.custom.configYaml, filename);
     } catch (err) {
-      setResult(String(err.message || err));
+      setError(String(err.message || err));
     } finally {
       setExporting(false);
     }
@@ -437,58 +419,44 @@ export default function BacktestPage() {
             </button>
           </div>
 
-          {result === "submitted" && (
-            <div style={{ color: "var(--positive)", fontSize: 13, marginTop: 12 }}>
-              Submitted — both this run and its master baseline are running in GitHub Actions now,
-              which can take a minute or more depending on the date range. Click "Check for results"
-              below once they've had time to finish.
+          {submitting && (
+            <div style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 12 }}>
+              Running both backtests now — usually done within a few tens of seconds.
             </div>
           )}
-          {result && result !== "submitted" && (
-            <div style={{ color: "var(--negative)", fontSize: 13, marginTop: 12 }}>Failed: {result}</div>
+          {error && (
+            <div style={{ color: "var(--negative)", fontSize: 13, marginTop: 12 }}>Failed: {error}</div>
           )}
         </form>
       </Panel>
 
       <div style={{ marginTop: 12 }}>
-        <Panel
-          title={activeRuns ? `Results vs. ${activeRuns.compareName}` : "Results"}
-          action={
-            activeRuns && (
-              <button onClick={checkResults} disabled={loadingRuns} style={refreshButtonStyle}>
-                {loadingRuns ? "Loading…" : "Check for results"}
-              </button>
-            )
-          }
-        >
-          {!activeRuns ? (
+        <Panel title={results ? `Results vs. ${results.compareName}` : "Results"}>
+          {!results ? (
             <Empty text='Run a backtest above to compare it against another config over the same window (defaults to master, changeable in "Compare against").' />
-          ) : runs.length === 0 ? (
-            <Empty text='Not back yet — click "Check for results" once the run(s) have had time to finish.' />
           ) : (
             <Table
               headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report"]}
-              // Custom run first, then its comparison baseline, regardless
-              // of which one Supabase happens to return first (whichever
-              // GitHub Actions run finished saving last sorts first
-              // otherwise) -- a stable, intuitive "yours, then baseline" order.
-              rows={[...runs]
-                .sort((a, b) => (a.run_label === activeRuns.label ? -1 : b.run_label === activeRuns.label ? 1 : 0))
-                .map((r) => [
-                  r.run_label === activeRuns.baselineLabel ? `${r.run_label} (${activeRuns.compareName})` : r.run_label || `#${r.id}`,
-                  (r.watchlist || []).join(", "),
-                  `${r.start_date} → ${r.end_date}`,
-                  ...METRIC_COLS.map((c) => {
-                    const v = r.metrics?.[c];
-                    if (v == null) return "—";
-                    return c.includes("pct") // covers total_return_pct, max_drawdown_pct, alpha_pct
-                      ? <span style={{ color: pnlColor(v) }}>{fmtPct(v)}</span>
-                      : typeof v === "number" ? v.toFixed(2) : v;
-                  }),
-                  <a href={reportUrl(r.run_label)} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
-                    View
-                  </a>,
-                ])}
+              rows={[
+                { ...results.custom, displayLabel: results.custom.run_label },
+                { ...results.compare, displayLabel: `${results.compare.run_label} (${results.compareName})` },
+              ].map((r) => [
+                r.displayLabel,
+                (r.watchlist || []).join(", "),
+                `${r.start_date} → ${r.end_date}`,
+                ...METRIC_COLS.map((c) => {
+                  const v = r.metrics?.[c];
+                  if (v == null) return "—";
+                  return c.includes("pct") // covers total_return_pct, max_drawdown_pct, alpha_pct
+                    ? <span style={{ color: pnlColor(v) }}>{fmtPct(v)}</span>
+                    : typeof v === "number" ? v.toFixed(2) : v;
+                }),
+                r.report_url ? (
+                  <a href={r.report_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View</a>
+                ) : (
+                  <span style={{ color: "var(--text-faint)" }}>—</span>
+                ),
+              ])}
             />
           )}
         </Panel>

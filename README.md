@@ -43,7 +43,7 @@ First run with real data caches prices to `data/cache/*.csv` so later backtests 
 1. In your Supabase project, open the **SQL Editor** and run everything in `supabase/migrations/` in order.
 2. Copy `.env.example` → `.env`, fill in your project's URL and **service role key** (Settings → API). Never commit `.env` or use the service key in frontend code.
 3. `python run_backtest.py --save --label "my-first-run"` writes the full config, metrics, and every trade into Supabase.
-4. For the dashboard's Backtest page to link to a run's HTML report: Storage → **New bucket** → name it `backtest-reports` → **Public bucket** (this is what `storage/supabase_client.py`'s `SupabaseStore.REPORTS_BUCKET` uploads `--chart` reports to via `run_backtest.py --save --chart`, and what the dashboard constructs each report's URL from — see that file and `dashboard/src/components/BacktestPage.jsx`'s `reportUrl`).
+4. For the dashboard's Backtest page to link to a run's HTML report: Storage → **New bucket** → name it `backtest-reports` → **Public bucket** (this is what `storage/supabase_client.py`'s `SupabaseStore.REPORTS_BUCKET` uploads `--chart` reports to; `api/run_backtest.py` returns each report's public URL directly in its response, so the dashboard never has to reconstruct it).
 
 Tables use Row Level Security with no public write policies — reachable only via the service role key from backend scripts, or (for reads) an authenticated dashboard login.
 
@@ -66,7 +66,7 @@ Tables use Row Level Security with no public write policies — reachable only v
 
 ## Dashboard
 
-A React console (`dashboard/`) showing equity curve, open positions, a profit/milestone tracker, recent signals, and backtest comparisons — reading live from Supabase.
+A React console (`dashboard/`) showing equity curve, open positions, a profit/milestone tracker, and recent signals, reading live from Supabase. Its Backtest page lets you configure and run a custom backtest against any config, automatically compared against a baseline (master by default, changeable) over the same window and starting cash — submitted to `api/run_backtest.py`, a Vercel Python function that runs the exact same `run_backtest_for_config()` the CLI and this project's other backtests use, synchronously (this project's runs consistently finish well under Vercel's function timeout, so no GitHub Actions dispatch/poll step is needed for this one).
 
 ```bash
 cd dashboard && npm install
@@ -75,6 +75,18 @@ npm run dev             # http://localhost:5173
 ```
 
 Requires a Supabase Auth login (create one under Authentication → Users — no public signup). Deploy to Vercel/Netlify (both free for personal projects) if you want it accessible from your phone.
+
+### Deploying to Vercel
+
+This project's Vercel **Root Directory must be the repo root**, not `dashboard/` — `vercel.json` at the repo root tells Vercel to build the frontend from `dashboard/` (`npm --prefix dashboard install && npm --prefix dashboard run build`, output `dashboard/dist`) while also exposing `/api/*` (both the `.js` functions and `api/run_backtest.py`) at the repo root. The Python function needs this specifically so it can import `strategy/`, `backtest/`, `data/`, and `storage/` directly — the real modules every other backtest in this project already uses, not a reimplementation — which isn't reachable from a `dashboard/`-rooted deployment. If you're setting this project up fresh, just point Vercel at the repo as-is; if you have an existing deployment rooted at `dashboard/`, change Root Directory to blank/`.` under Project Settings → General.
+
+Vercel environment variables needed (Project → Settings → Environment Variables):
+- `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` — same public values as `dashboard/.env`.
+- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` — the service role key, used server-side only by `api/run_backtest.py` to save results and upload chart reports (same credentials `run_backtest.py --save` already uses everywhere else).
+- `ALPACA_API_KEY`, `ALPACA_SECRET_KEY` — used server-side by `api/quotes.js` (live prices for open positions).
+- `GITHUB_DISPATCH_TOKEN` — a fine-grained GitHub PAT (Actions read/write, this repo only), used server-side by `api/sell.js` to trigger `close-position.yml`.
+
+None of these are `VITE_`-prefixed except the two that are meant to be public — Vite only bundles `VITE_`-prefixed vars into client code, so the rest stay server-side.
 
 ## Important
 
