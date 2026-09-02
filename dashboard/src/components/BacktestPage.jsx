@@ -20,8 +20,8 @@ function reportUrl(runLabel) {
 }
 
 const BASE_CONFIGS = [
-  { value: "config/strategy_master.yaml", label: "strategy_master.yaml (live default)" },
-  { value: "config/strategy_master_crypto_v36.yaml", label: "strategy_master_crypto_v36.yaml (preserved crypto track)" },
+  { value: "config/strategy_master.yaml", label: "strategy_master.yaml (live default)", shortName: "master" },
+  { value: "config/strategy_master_crypto_v36.yaml", label: "strategy_master_crypto_v36.yaml (preserved crypto track)", shortName: "crypto-v36" },
   { value: "__custom__", label: "Other (enter a path)…" },
 ];
 
@@ -128,6 +128,11 @@ function toFieldString(value) {
 export default function BacktestPage() {
   const [baseConfig, setBaseConfig] = useState(BASE_CONFIGS[0].value);
   const [customPath, setCustomPath] = useState("");
+  // What the custom run gets compared against -- defaults to master
+  // (BASE_CONFIGS[0]) but can point at any other config, same picker
+  // shape as "Base config" above (including its own "Other" path entry).
+  const [compareConfig, setCompareConfig] = useState(BASE_CONFIGS[0].value);
+  const [compareCustomPath, setCompareCustomPath] = useState("");
   const [selectedTickers, setSelectedTickers] = useState([]);
   const [customTickerText, setCustomTickerText] = useState("");
   const [fields, setFields] = useState({});
@@ -142,13 +147,16 @@ export default function BacktestPage() {
   // baseline) -- results only ever shows THIS session's pair, not a
   // running history. Cleared back to null on a fresh submit so a stale
   // pair's results don't linger next to a new one.
-  const [activeRuns, setActiveRuns] = useState(null); // { label, baselineLabel } | null
+  const [activeRuns, setActiveRuns] = useState(null); // { label, baselineLabel, compareName } | null
   const [runs, setRuns] = useState([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingBase, setLoadingBase] = useState(false);
   const [baseError, setBaseError] = useState(null);
 
   const activeBasePath = baseConfig === "__custom__" ? customPath : baseConfig;
+  const activeComparePath = compareConfig === "__custom__" ? compareCustomPath : compareConfig;
+  const compareLabelSuffix = BASE_CONFIGS.find((c) => c.value === compareConfig)?.shortName
+    ?? (activeComparePath.split("/").pop()?.replace(/\.ya?ml$/, "") || "compare");
 
   // Pre-fills the whole form from whatever base config is currently
   // selected -- fetched fresh (client-side, GitHub's raw content API
@@ -261,18 +269,20 @@ export default function BacktestPage() {
     setResult(null);
     setRuns([]);
     try {
+      if (!activeComparePath) throw new Error("Pick a comparison config, or enter a path for it, before running.");
+
       const label = strategyName || `custom-${Date.now()}`;
-      const baselineLabel = `${label}-vs-master`;
+      const baselineLabel = `${label}-vs-${compareLabelSuffix}`;
 
       await callBacktestApi({ runLabel: label });
 
-      // Master baseline: same start/end/starting-cash as the custom run
-      // above (an apples-to-apples window and account size), otherwise
-      // strategy_master.yaml completely unmodified -- none of the
-      // custom form's other fields carry over here, on purpose.
+      // Comparison baseline: same start/end/starting-cash as the custom
+      // run above (an apples-to-apples window and account size), but
+      // otherwise the comparison config completely unmodified -- none of
+      // the custom form's other fields carry over here, on purpose.
       await callBacktestApi({
         runLabel: baselineLabel,
-        baseConfig: "config/strategy_master.yaml",
+        baseConfig: activeComparePath,
         formFields: {
           start_date: fields.start_date || undefined,
           end_date: fields.end_date || undefined,
@@ -281,7 +291,10 @@ export default function BacktestPage() {
         advancedYaml: "",
       });
 
-      setActiveRuns({ label, baselineLabel });
+      // Snapshot compareLabelSuffix at submit time, not read live later --
+      // the dropdown could change before "Check for results" is clicked,
+      // and the label/results panel should describe what actually ran.
+      setActiveRuns({ label, baselineLabel, compareName: compareLabelSuffix });
       setResult("submitted");
     } catch (err) {
       setResult(String(err.message || err));
@@ -315,23 +328,44 @@ export default function BacktestPage() {
         }
       >
         <form onSubmit={handleSubmit}>
-          <label style={labelStyle}>Base config <span style={{ color: "var(--negative)" }}>*</span></label>
-          <select value={baseConfig} onChange={(e) => setBaseConfig(e.target.value)} style={inputStyle}>
-            {BASE_CONFIGS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-          </select>
-          {baseConfig === "__custom__" && (
-            <input
-              type="text"
-              value={customPath}
-              onChange={(e) => setCustomPath(e.target.value)}
-              onBlur={() => loadBaseConfig(customPath)}
-              placeholder="config/strategy_v40_tight_stops.yaml — press Tab/click away to load"
-              style={{ ...inputStyle, marginTop: 8 }}
-            />
-          )}
-          {baseError && <div style={{ color: "var(--negative)", fontSize: 12, marginTop: 6 }}>{baseError}</div>}
-          <div style={{ color: "var(--text-faint)", fontSize: 11, marginTop: 6 }}>
-            Every field below is pre-filled from this config — edit whatever you want to change, leave the rest as-is.
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 16px" }}>
+            <div>
+              <label style={labelStyle}>Base config <span style={{ color: "var(--negative)" }}>*</span></label>
+              <select value={baseConfig} onChange={(e) => setBaseConfig(e.target.value)} style={inputStyle}>
+                {BASE_CONFIGS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+              {baseConfig === "__custom__" && (
+                <input
+                  type="text"
+                  value={customPath}
+                  onChange={(e) => setCustomPath(e.target.value)}
+                  onBlur={() => loadBaseConfig(customPath)}
+                  placeholder="config/strategy_v40_tight_stops.yaml — press Tab/click away to load"
+                  style={{ ...inputStyle, marginTop: 8 }}
+                />
+              )}
+              {baseError && <div style={{ color: "var(--negative)", fontSize: 12, marginTop: 6 }}>{baseError}</div>}
+              <div style={helpStyle}>What every field below pre-fills from — this is the config you're customizing.</div>
+            </div>
+            <div>
+              <label style={labelStyle}>Compare against <span style={{ color: "var(--negative)" }}>*</span></label>
+              <select value={compareConfig} onChange={(e) => setCompareConfig(e.target.value)} style={inputStyle}>
+                {BASE_CONFIGS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
+              {compareConfig === "__custom__" && (
+                <input
+                  type="text"
+                  value={compareCustomPath}
+                  onChange={(e) => setCompareCustomPath(e.target.value)}
+                  placeholder="config/strategy_v40_tight_stops.yaml"
+                  style={{ ...inputStyle, marginTop: 8 }}
+                />
+              )}
+              <div style={helpStyle}>Runs alongside yours, same window and starting cash, otherwise unmodified. Defaults to master — pick a different config to compare against something else instead.</div>
+            </div>
+          </div>
+          <div style={{ color: "var(--text-faint)", fontSize: 11, marginTop: 10 }}>
+            Every field below is pre-filled from the base config — edit whatever you want to change, leave the rest as-is.
             Fields marked <span style={{ color: "var(--negative)" }}>*</span> are required whenever shown; unmarked fields can be left blank.
             Fields that only matter for a particular choice elsewhere (e.g. the entry rule, or sizing method) only appear once that choice is selected.
           </div>
@@ -373,8 +407,8 @@ export default function BacktestPage() {
 
           <label style={{ ...labelStyle, marginTop: 16 }}>
             Strategy name — labels this run below and names the file if you export. Running also
-            launches a same-window, same-starting-cash baseline against strategy_master.yaml
-            automatically, so you always get a like-for-like comparison.
+            launches a same-window, same-starting-cash baseline against whatever's picked in
+            "Compare against" above, so you always get a like-for-like comparison.
           </label>
           <input
             type="text"
@@ -418,7 +452,7 @@ export default function BacktestPage() {
 
       <div style={{ marginTop: 12 }}>
         <Panel
-          title="Results vs. master"
+          title={activeRuns ? `Results vs. ${activeRuns.compareName}` : "Results"}
           action={
             activeRuns && (
               <button onClick={checkResults} disabled={loadingRuns} style={refreshButtonStyle}>
@@ -428,20 +462,20 @@ export default function BacktestPage() {
           }
         >
           {!activeRuns ? (
-            <Empty text="Run a backtest above to compare it against strategy_master.yaml over the same window." />
+            <Empty text='Run a backtest above to compare it against another config over the same window (defaults to master, changeable in "Compare against").' />
           ) : runs.length === 0 ? (
             <Empty text='Not back yet — click "Check for results" once the run(s) have had time to finish.' />
           ) : (
             <Table
               headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report"]}
-              // Custom run first, then its master baseline, regardless of
-              // which one Supabase happens to return first (whichever
+              // Custom run first, then its comparison baseline, regardless
+              // of which one Supabase happens to return first (whichever
               // GitHub Actions run finished saving last sorts first
-              // otherwise) -- a stable, intuitive "yours, then master" order.
+              // otherwise) -- a stable, intuitive "yours, then baseline" order.
               rows={[...runs]
                 .sort((a, b) => (a.run_label === activeRuns.label ? -1 : b.run_label === activeRuns.label ? 1 : 0))
                 .map((r) => [
-                  r.run_label === activeRuns.baselineLabel ? `${r.run_label} (master)` : r.run_label || `#${r.id}`,
+                  r.run_label === activeRuns.baselineLabel ? `${r.run_label} (${activeRuns.compareName})` : r.run_label || `#${r.id}`,
                   (r.watchlist || []).join(", "),
                   `${r.start_date} → ${r.end_date}`,
                   ...METRIC_COLS.map((c) => {
