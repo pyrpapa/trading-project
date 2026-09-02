@@ -33,6 +33,30 @@ class SupabaseStore:
 
         self.client = create_client(url, key)
 
+    # Bucket for report.py's generated HTML reports -- must exist already
+    # and be set PUBLIC in the Supabase dashboard (Storage -> New bucket),
+    # this client doesn't create it. upsert=true so re-running the same
+    # run_label overwrites its old report instead of accumulating one
+    # per run -- these are meant to be viewed right after a run, not kept
+    # as history (Supabase's backtest_runs table is already the durable
+    # record of metrics; this is just enough to view the chart once).
+    REPORTS_BUCKET = "backtest-reports"
+
+    def upload_report(self, local_path: str, object_name: str) -> str:
+        """
+        Uploads a report.py-generated HTML file to Supabase Storage and
+        returns its public URL. object_name is just the filename (e.g.
+        "my-run_report.html"), not a path -- matches report.py's own
+        f"{safe_label}_report.html" naming so the dashboard can construct
+        the same URL client-side from a run_label alone, no DB column
+        needed to look it up.
+        """
+        with open(local_path, "rb") as f:
+            self.client.storage.from_(self.REPORTS_BUCKET).upload(
+                object_name, f, file_options={"content-type": "text/html", "upsert": "true"}
+            )
+        return self.client.storage.from_(self.REPORTS_BUCKET).get_public_url(object_name)
+
     def save_backtest_run(self, cfg: dict, metrics: dict, run_label: str = None) -> dict:
         row = {
             "run_label": run_label,

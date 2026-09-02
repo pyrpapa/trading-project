@@ -43,6 +43,7 @@ First run with real data caches prices to `data/cache/*.csv` so later backtests 
 1. In your Supabase project, open the **SQL Editor** and run everything in `supabase/migrations/` in order.
 2. Copy `.env.example` → `.env`, fill in your project's URL and **service role key** (Settings → API). Never commit `.env` or use the service key in frontend code.
 3. `python run_backtest.py --save --label "my-first-run"` writes the full config, metrics, and every trade into Supabase.
+4. For the dashboard's Backtest page to link to a run's HTML report: Storage → **New bucket** → name it `backtest-reports` → **Public bucket** (this is what `storage/supabase_client.py`'s `SupabaseStore.REPORTS_BUCKET` uploads `--chart` reports to via `run_backtest.py --save --chart`, and what the dashboard constructs each report's URL from — see that file and `dashboard/src/components/BacktestPage.jsx`'s `reportUrl`).
 
 Tables use Row Level Security with no public write policies — reachable only via the service role key from backend scripts, or (for reads) an authenticated dashboard login.
 

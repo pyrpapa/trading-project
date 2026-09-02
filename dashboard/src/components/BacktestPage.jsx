@@ -6,6 +6,19 @@ import TickerPicker from "./TickerPicker.jsx";
 
 const REPO = "pyrpapa/trading-project";
 
+// Matches storage/supabase_client.py's SupabaseStore.REPORTS_BUCKET
+// exactly -- keep the two in sync. No DB lookup needed for the report
+// URL: report.py always names the file f"{safe_label}_report.html"
+// (spaces -> underscores) and upload_report uses that same basename as
+// the object name, so the public URL is fully derivable from a
+// run_label alone once the bucket is public.
+const REPORTS_BUCKET = "backtest-reports";
+
+function reportUrl(runLabel) {
+  const safeLabel = (runLabel || "").replace(/ /g, "_");
+  return `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/${REPORTS_BUCKET}/${safeLabel}_report.html`;
+}
+
 const BASE_CONFIGS = [
   { value: "config/strategy_master.yaml", label: "strategy_master.yaml (live default)" },
   { value: "config/strategy_master_crypto_v36.yaml", label: "strategy_master_crypto_v36.yaml (preserved crypto track)" },
@@ -125,7 +138,12 @@ export default function BacktestPage() {
   const [submitting, setSubmitting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [result, setResult] = useState(null); // "submitted" | error string | null
-  const [recentRuns, setRecentRuns] = useState([]);
+  // The pair of run_labels just dispatched (custom + its master
+  // baseline) -- results only ever shows THIS session's pair, not a
+  // running history. Cleared back to null on a fresh submit so a stale
+  // pair's results don't linger next to a new one.
+  const [activeRuns, setActiveRuns] = useState(null); // { label, baselineLabel } | null
+  const [runs, setRuns] = useState([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [loadingBase, setLoadingBase] = useState(false);
   const [baseError, setBaseError] = useState(null);
@@ -170,10 +188,15 @@ export default function BacktestPage() {
     return [...new Set([...selectedTickers, ...custom])];
   }
 
-  async function loadRecentRuns() {
+  async function checkResults() {
+    if (!activeRuns) return;
     setLoadingRuns(true);
-    const { data } = await supabase.from("backtest_runs").select("*").order("created_at", { ascending: false }).limit(10);
-    setRecentRuns(data ?? []);
+    const { data } = await supabase
+      .from("backtest_runs")
+      .select("*")
+      .in("run_label", [activeRuns.label, activeRuns.baselineLabel])
+      .order("created_at", { ascending: false });
+    setRuns(data ?? []);
     setLoadingRuns(false);
   }
 
@@ -236,8 +259,29 @@ export default function BacktestPage() {
     e.preventDefault();
     setSubmitting(true);
     setResult(null);
+    setRuns([]);
     try {
-      await callBacktestApi({});
+      const label = strategyName || `custom-${Date.now()}`;
+      const baselineLabel = `${label}-vs-master`;
+
+      await callBacktestApi({ runLabel: label });
+
+      // Master baseline: same start/end/starting-cash as the custom run
+      // above (an apples-to-apples window and account size), otherwise
+      // strategy_master.yaml completely unmodified -- none of the
+      // custom form's other fields carry over here, on purpose.
+      await callBacktestApi({
+        runLabel: baselineLabel,
+        baseConfig: "config/strategy_master.yaml",
+        formFields: {
+          start_date: fields.start_date || undefined,
+          end_date: fields.end_date || undefined,
+          starting_cash: fields.starting_cash ? Number(fields.starting_cash) : undefined,
+        },
+        advancedYaml: "",
+      });
+
+      setActiveRuns({ label, baselineLabel });
       setResult("submitted");
     } catch (err) {
       setResult(String(err.message || err));
@@ -328,7 +372,9 @@ export default function BacktestPage() {
           />
 
           <label style={{ ...labelStyle, marginTop: 16 }}>
-            Strategy name — labels this run below, and names the file if you export
+            Strategy name — labels this run below and names the file if you export. Running also
+            launches a same-window, same-starting-cash baseline against strategy_master.yaml
+            automatically, so you always get a like-for-like comparison.
           </label>
           <input
             type="text"
@@ -359,8 +405,9 @@ export default function BacktestPage() {
 
           {result === "submitted" && (
             <div style={{ color: "var(--positive)", fontSize: 13, marginTop: 12 }}>
-              Submitted — this runs in GitHub Actions and can take a minute or more depending on the
-              date range. Click "Check for results" below once it's had time to finish.
+              Submitted — both this run and its master baseline are running in GitHub Actions now,
+              which can take a minute or more depending on the date range. Click "Check for results"
+              below once they've had time to finish.
             </div>
           )}
           {result && result !== "submitted" && (
@@ -371,26 +418,43 @@ export default function BacktestPage() {
 
       <div style={{ marginTop: 12 }}>
         <Panel
-          title="Recent backtest runs"
-          action={<button onClick={loadRecentRuns} disabled={loadingRuns} style={refreshButtonStyle}>{loadingRuns ? "Loading…" : "Check for results"}</button>}
+          title="Results vs. master"
+          action={
+            activeRuns && (
+              <button onClick={checkResults} disabled={loadingRuns} style={refreshButtonStyle}>
+                {loadingRuns ? "Loading…" : "Check for results"}
+              </button>
+            )
+          }
         >
-          {recentRuns.length === 0 ? (
-            <Empty text='No runs loaded yet — click "Check for results" above.' />
+          {!activeRuns ? (
+            <Empty text="Run a backtest above to compare it against strategy_master.yaml over the same window." />
+          ) : runs.length === 0 ? (
+            <Empty text='Not back yet — click "Check for results" once the run(s) have had time to finish.' />
           ) : (
             <Table
-              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c])]}
-              rows={recentRuns.map((r) => [
-                r.run_label || `#${r.id}`,
-                (r.watchlist || []).join(", "),
-                `${r.start_date} → ${r.end_date}`,
-                ...METRIC_COLS.map((c) => {
-                  const v = r.metrics?.[c];
-                  if (v == null) return "—";
-                  return c.includes("pct") // covers total_return_pct, max_drawdown_pct, alpha_pct
-                    ? <span style={{ color: pnlColor(v) }}>{fmtPct(v)}</span>
-                    : typeof v === "number" ? v.toFixed(2) : v;
-                }),
-              ])}
+              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report"]}
+              // Custom run first, then its master baseline, regardless of
+              // which one Supabase happens to return first (whichever
+              // GitHub Actions run finished saving last sorts first
+              // otherwise) -- a stable, intuitive "yours, then master" order.
+              rows={[...runs]
+                .sort((a, b) => (a.run_label === activeRuns.label ? -1 : b.run_label === activeRuns.label ? 1 : 0))
+                .map((r) => [
+                  r.run_label === activeRuns.baselineLabel ? `${r.run_label} (master)` : r.run_label || `#${r.id}`,
+                  (r.watchlist || []).join(", "),
+                  `${r.start_date} → ${r.end_date}`,
+                  ...METRIC_COLS.map((c) => {
+                    const v = r.metrics?.[c];
+                    if (v == null) return "—";
+                    return c.includes("pct") // covers total_return_pct, max_drawdown_pct, alpha_pct
+                      ? <span style={{ color: pnlColor(v) }}>{fmtPct(v)}</span>
+                      : typeof v === "number" ? v.toFixed(2) : v;
+                  }),
+                  <a href={reportUrl(r.run_label)} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+                    View
+                  </a>,
+                ])}
             />
           )}
         </Panel>

@@ -50,5 +50,8 @@ jobs:
           RUN_LABEL: ${{ inputs.run_label }}
         # Same reasoning as the "Write config file" step above -- RUN_LABEL
         # flows through the environment, not shell interpolation, even
-        # though it's a shorter/simpler string than config_yaml.
-        run: python run_backtest.py --config custom_backtest.yaml --save --label "$RUN_LABEL"
+        # though it's a shorter/simpler string than config_yaml. --chart
+        # generates the HTML report and uploads it to Supabase Storage
+        # (see run_backtest.py's own make_chart block) so the dashboard's
+        # Backtest page can link to it.
+        run: python run_backtest.py --config custom_backtest.yaml --save --chart --label "$RUN_LABEL"
