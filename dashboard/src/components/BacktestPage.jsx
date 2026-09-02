@@ -51,8 +51,8 @@ const FIELD_GROUPS = [
       { key: "volume_confirmation", label: "Require volume confirmation", path: "entry.volume_confirmation", type: "boolselect", showIf: (v) => v.entry_type !== "always", help: "If enabled, an entry also requires that day's volume to be above its own moving average." },
       { key: "volume_ma_period", label: "Volume MA period (days)", path: "entry.volume_ma_period", type: "number", showIf: (v) => v.entry_type !== "always", help: "Moving-average length for the volume-confirmation check above." },
       { key: "regime_filter_period", label: "Regime filter period (days, 0 = off)", path: "entry.regime_filter_period", type: "number", help: "A much slower MA the fast entry signal must also be above (a macro trend filter). 0 disables it." },
-      { key: "choppiness_filter_period", label: "Choppiness filter period (days)", path: "entry.choppiness_filter_period", type: "number", help: "Lookback window for the choppiness index (how efficiently price is trending vs. chopping sideways)." },
       { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", path: "entry.choppiness_threshold", type: "number", step: "1", nullable: true, help: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter." },
+      { key: "choppiness_filter_period", label: "Choppiness filter period (days)", path: "entry.choppiness_filter_period", type: "number", showIf: (v) => v.choppiness_threshold !== "", help: "Lookback window for the choppiness index used by the threshold above. Only matters when a threshold is set." },
     ],
   },
   {
