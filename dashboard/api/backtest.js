@@ -79,7 +79,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "POST only" });
   }
 
-  const { baseConfig, formFields, advancedYaml, runLabel } = req.body || {};
+  const { baseConfig, formFields, advancedYaml, runLabel, exportOnly } = req.body || {};
   if (!baseConfig) {
     return res.status(400).json({ error: "baseConfig required, e.g. config/strategy_master.yaml" });
   }
@@ -101,8 +101,10 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: "Invalid or expired session -- log in again and retry" });
   }
 
+  // exportOnly skips this -- it never dispatches anything, just returns
+  // the merged YAML, so it doesn't need a GitHub token at all.
   const dispatchToken = process.env.GITHUB_DISPATCH_TOKEN;
-  if (!dispatchToken) {
+  if (!exportOnly && !dispatchToken) {
     return res.status(500).json({ error: "GITHUB_DISPATCH_TOKEN not configured on the server" });
   }
 
@@ -142,6 +144,10 @@ export default async function handler(req, res) {
   }
 
   const configYaml = yaml.dump(cfg);
+
+  if (exportOnly) {
+    return res.status(200).json({ ok: true, configYaml });
+  }
 
   try {
     const resp = await fetch(
