@@ -39,7 +39,7 @@ const FIELD_GROUPS = [
       { key: "volume_ma_period", label: "Volume MA period (days)", path: "entry.volume_ma_period", type: "number", help: "Moving-average length for the volume-confirmation check above." },
       { key: "regime_filter_period", label: "Regime filter period (days, 0 = off)", path: "entry.regime_filter_period", type: "number", help: "A much slower MA the fast entry signal must also be above (a macro trend filter). 0 disables it." },
       { key: "choppiness_filter_period", label: "Choppiness filter period (days)", path: "entry.choppiness_filter_period", type: "number", help: "Lookback window for the choppiness index (how efficiently price is trending vs. chopping sideways)." },
-      { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", path: "entry.choppiness_threshold", type: "number", step: "1", help: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter." },
+      { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", path: "entry.choppiness_threshold", type: "number", step: "1", nullable: true, help: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter." },
     ],
   },
   {
@@ -49,7 +49,7 @@ const FIELD_GROUPS = [
       { key: "ma_exit", label: "Trend-exit enabled", path: "exit.ma_exit", type: "boolselect", help: "Master on/off switch for the trend-exit rule above — disabled means only the stop-loss/take-profit can close a position." },
       { key: "exit_breakout_period", label: "Donchian exit period (days)", path: "exit.exit_breakout_period", type: "number", help: "Lookback window for the donchian_low trend-exit rule's N-day low." },
       { key: "stop_loss_pct", label: "Stop-loss (%)", path: "exit.stop_loss_pct", type: "number", step: "0.5", help: "Flat-percent stop-loss below entry price. Ignored if sizing method is atr_unit (that mode uses stop distance × ATR instead)." },
-      { key: "take_profit_pct", label: "Take-profit (%, blank = disabled)", path: "exit.take_profit_pct", type: "number", step: "0.5", help: "Flat-percent take-profit above entry price. Blank means only stops and the trend-exit rule can close a winner." },
+      { key: "take_profit_pct", label: "Take-profit (%, blank = disabled)", path: "exit.take_profit_pct", type: "number", step: "0.5", nullable: true, help: "Flat-percent take-profit above entry price. Blank means only stops and the trend-exit rule can close a winner." },
     ],
   },
   {
@@ -169,7 +169,17 @@ export default function BacktestPage() {
   }
 
   function coerceField(f, raw) {
-    if (raw === undefined || raw === "") return null; // blank means null in the config (take_profit_pct, choppiness_threshold)
+    if (raw === undefined || raw === "") {
+      // Only the two fields explicitly marked nullable (take_profit_pct,
+      // choppiness_threshold) treat blank as a real "set this to null"
+      // value -- everything else (ma_period, stop_loss_pct, etc.) is a
+      // required number in the config, and run_backtest.py crashes on
+      // None there (its lookback_days = max(...) call has no None
+      // handling). Every other field is always pre-filled with a real
+      // value anyway, so blank on one of those means "skip -- leave
+      // whatever the base config already had," not "null it out."
+      return f.nullable ? null : undefined;
+    }
     if (f.type === "number") return Number(raw);
     if (f.type === "boolselect") return raw === "true";
     return raw; // text, date, select
@@ -312,13 +322,18 @@ export default function BacktestPage() {
           />
 
           <div style={{ display: "flex", gap: 10 }}>
-            <button type="submit" disabled={submitting} style={{ ...submitButtonStyle, width: "auto", flex: 1 }}>
-              {submitting ? "Submitting…" : "Run backtest"}
+            {/* Also disabled while the base config is still loading -- submitting
+                before that async pre-fill resolves would send blank fields for
+                everything, which used to mean "null out ma_period etc." and
+                crash run_backtest.py; fixed at the source (coerceField above),
+                but this closes the race that could trigger it in the first place. */}
+            <button type="submit" disabled={submitting || loadingBase} style={{ ...submitButtonStyle, width: "auto", flex: 1 }}>
+              {submitting ? "Submitting…" : loadingBase ? "Loading base config…" : "Run backtest"}
             </button>
             <button
               type="button"
               onClick={handleExport}
-              disabled={exporting}
+              disabled={exporting || loadingBase}
               style={{ ...submitButtonStyle, width: "auto", flex: 1, background: "var(--surface-raised)", color: "var(--text-primary)", border: "1px solid var(--border)" }}
             >
               {exporting ? "Exporting…" : "Export config (.yaml)"}
