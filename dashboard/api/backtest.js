@@ -26,27 +26,42 @@
 // }
 
 import { createClient } from "@supabase/supabase-js";
-import yaml from "js-yaml";
+import { load as yamlLoad, dump as yamlDump } from "js-yaml";
 
 const REPO = "pyrpapa/trading-project";
 
-// Curated form field -> dotted YAML path. Anything not in this list can
-// still be set via the advancedYaml override -- this is deliberately a
-// subset (the parameters parameter_sweep.py already treats as the
-// commonly-tuned ones), not an attempt to cover every key in
-// config/strategy_master.yaml.
+// Curated form field -> dotted YAML path. Mirrors BacktestPage.jsx's
+// FIELD_GROUPS `path` values exactly -- keep the two in sync. Anything
+// not in this list can still be set via the advancedYaml override.
 const FIELD_PATHS = {
   watchlist: "watchlist",
   start_date: "backtest.start_date",
   end_date: "backtest.end_date",
   starting_cash: "backtest.starting_cash",
+  entry_type: "entry.type",
   ma_period: "entry.ma_period",
+  breakout_period: "entry.breakout_period",
+  volume_confirmation: "entry.volume_confirmation",
+  volume_ma_period: "entry.volume_ma_period",
+  regime_filter_period: "entry.regime_filter_period",
+  choppiness_filter_period: "entry.choppiness_filter_period",
+  choppiness_threshold: "entry.choppiness_threshold",
+  exit_type: "exit.type",
+  ma_exit: "exit.ma_exit",
+  exit_breakout_period: "exit.exit_breakout_period",
   stop_loss_pct: "exit.stop_loss_pct",
   take_profit_pct: "exit.take_profit_pct",
+  sizing_method: "risk.sizing_method",
+  atr_period: "risk.atr_period",
   risk_pct_per_unit: "risk.risk_pct_per_unit",
   stop_atr_multiple: "risk.stop_atr_multiple",
   max_position_pct: "risk.max_position_pct",
   max_invested_pct: "risk.max_invested_pct",
+  pyramiding_enabled: "risk.pyramiding.enabled",
+  pyramiding_unit_interval_n: "risk.pyramiding.unit_interval_n",
+  pyramiding_max_units: "risk.pyramiding.max_units",
+  trailing_stop_enabled: "risk.trailing_stop.enabled",
+  trailing_stop_atr_multiple: "risk.trailing_stop.atr_multiple",
 };
 
 function setPath(obj, dottedPath, value) {
@@ -112,7 +127,7 @@ export default async function handler(req, res) {
   try {
     const rawResp = await fetch(`https://raw.githubusercontent.com/${REPO}/main/${baseConfig}`);
     if (!rawResp.ok) throw new Error(`couldn't fetch ${baseConfig} (${rawResp.status}) -- check the path`);
-    cfg = yaml.load(await rawResp.text());
+    cfg = yamlLoad(await rawResp.text());
     if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
       throw new Error(`${baseConfig} didn't parse into a config object -- is the path right?`);
     }
@@ -121,7 +136,11 @@ export default async function handler(req, res) {
   }
 
   for (const [field, value] of Object.entries(formFields || {})) {
-    if (value === "" || value === null || value === undefined) continue; // untouched field -- leave base config's value
+    // The dashboard form pre-fills from this same base config and always
+    // sends every field, so `null` here is a deliberate value (a
+    // nullable field like take_profit_pct left blank), NOT "untouched" --
+    // only a genuinely absent key (not in formFields at all) means that.
+    if (value === undefined) continue;
     if (!(field in FIELD_PATHS)) continue; // ignore anything not in the curated set
     setPath(cfg, FIELD_PATHS[field], value);
   }
@@ -129,7 +148,7 @@ export default async function handler(req, res) {
   if (advancedYaml && advancedYaml.trim()) {
     let override;
     try {
-      override = yaml.load(advancedYaml);
+      override = yamlLoad(advancedYaml);
     } catch (e) {
       return res.status(400).json({ error: `Advanced YAML didn't parse: ${e.message || e}` });
     }
@@ -143,7 +162,7 @@ export default async function handler(req, res) {
     cfg = deepMerge(cfg, override);
   }
 
-  const configYaml = yaml.dump(cfg);
+  const configYaml = yamlDump(cfg);
 
   if (exportOnly) {
     return res.status(200).json({ ok: true, configYaml });
