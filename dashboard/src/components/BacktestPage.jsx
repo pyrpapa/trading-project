@@ -13,10 +13,23 @@ const BASE_CONFIGS = [
 ];
 
 // Curated fields, grouped to match config/strategy_master.yaml's own
-// section layout. Each field carries its own `help` text inline now
-// (shown right under the input, not in a separate section) and a
-// dotted `path` used both to pre-fill the field from the chosen base
-// config and to write it back into the merged config server-side.
+// section layout. Each field carries its own `help` text inline (shown
+// right under the input) and a dotted `path` used both to pre-fill the
+// field from the chosen base config and to write it back into the
+// merged config server-side.
+//
+// `nullable: true` marks the only two fields where a blank value is
+// itself meaningful (sets that key to null in the config) -- every
+// other field is required whenever it's shown (marked with * in the
+// UI) and blank there just means "leave the base config's value alone."
+//
+// `showIf(v)` hides a field when it wouldn't do anything given the
+// current values of OTHER fields (`v` is the live `fields` state, keyed
+// the same way) -- e.g. the Donchian breakout lookback only matters
+// when the entry rule is actually donchian_breakout. Fields with no
+// showIf are always shown. Mirrors the actual gating logic in
+// strategy/rules.py / backtest/engine.py -- see each field's own `help`
+// for the plain-English version of why.
 //
 // This same key->path mapping is duplicated in api/backtest.js's
 // FIELD_PATHS -- keep the two in sync if you add/rename a field here.
@@ -33,32 +46,32 @@ const FIELD_GROUPS = [
     title: "Entry",
     fields: [
       { key: "entry_type", label: "Entry rule", path: "entry.type", type: "select", options: ["ma_crossover", "donchian_breakout", "always"], help: "ma_crossover buys the first day price closes above its MA; donchian_breakout buys any day price closes above its N-day high; always buys back in immediately after any exit (isolates whether entry timing itself adds value)." },
-      { key: "ma_period", label: "MA period (days)", path: "entry.ma_period", type: "number", help: "Moving-average length for the ma_crossover entry rule (and the ma_crossover trend-exit rule, if selected)." },
-      { key: "breakout_period", label: "Donchian breakout period (days)", path: "entry.breakout_period", type: "number", help: "Lookback window for the donchian_breakout entry rule's N-day high." },
-      { key: "volume_confirmation", label: "Require volume confirmation", path: "entry.volume_confirmation", type: "boolselect", help: "If enabled, an entry also requires that day's volume to be above its own moving average." },
-      { key: "volume_ma_period", label: "Volume MA period (days)", path: "entry.volume_ma_period", type: "number", help: "Moving-average length for the volume-confirmation check above." },
+      { key: "ma_period", label: "MA period (days)", path: "entry.ma_period", type: "number", showIf: (v) => v.entry_type === "ma_crossover" || (v.ma_exit !== "false" && v.exit_type === "ma_crossover"), help: "Moving-average length for the ma_crossover entry rule (and the ma_crossover trend-exit rule, if selected)." },
+      { key: "breakout_period", label: "Donchian breakout period (days)", path: "entry.breakout_period", type: "number", showIf: (v) => v.entry_type === "donchian_breakout", help: "Lookback window for the donchian_breakout entry rule's N-day high." },
+      { key: "volume_confirmation", label: "Require volume confirmation", path: "entry.volume_confirmation", type: "boolselect", showIf: (v) => v.entry_type !== "always", help: "If enabled, an entry also requires that day's volume to be above its own moving average." },
+      { key: "volume_ma_period", label: "Volume MA period (days)", path: "entry.volume_ma_period", type: "number", showIf: (v) => v.entry_type !== "always", help: "Moving-average length for the volume-confirmation check above." },
       { key: "regime_filter_period", label: "Regime filter period (days, 0 = off)", path: "entry.regime_filter_period", type: "number", help: "A much slower MA the fast entry signal must also be above (a macro trend filter). 0 disables it." },
       { key: "choppiness_filter_period", label: "Choppiness filter period (days)", path: "entry.choppiness_filter_period", type: "number", help: "Lookback window for the choppiness index (how efficiently price is trending vs. chopping sideways)." },
-      { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", path: "entry.choppiness_threshold", type: "number", step: "1", help: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter." },
+      { key: "choppiness_threshold", label: "Choppiness threshold (blank = off)", path: "entry.choppiness_threshold", type: "number", step: "1", nullable: true, help: "Blocks entries when the choppiness index is above this value (market judged to be ranging, not trending). Blank disables the filter." },
     ],
   },
   {
     title: "Exit",
     fields: [
-      { key: "exit_type", label: "Trend-exit rule", path: "exit.type", type: "select", options: ["ma_crossover", "donchian_low"], help: "ma_crossover exits the first day price closes back below its MA; donchian_low exits the first day price closes below its N-day low (more tolerant of pullbacks)." },
-      { key: "ma_exit", label: "Trend-exit enabled", path: "exit.ma_exit", type: "boolselect", help: "Master on/off switch for the trend-exit rule above — disabled means only the stop-loss/take-profit can close a position." },
-      { key: "exit_breakout_period", label: "Donchian exit period (days)", path: "exit.exit_breakout_period", type: "number", help: "Lookback window for the donchian_low trend-exit rule's N-day low." },
-      { key: "stop_loss_pct", label: "Stop-loss (%)", path: "exit.stop_loss_pct", type: "number", step: "0.5", help: "Flat-percent stop-loss below entry price. Ignored if sizing method is atr_unit (that mode uses stop distance × ATR instead)." },
-      { key: "take_profit_pct", label: "Take-profit (%, blank = disabled)", path: "exit.take_profit_pct", type: "number", step: "0.5", help: "Flat-percent take-profit above entry price. Blank means only stops and the trend-exit rule can close a winner." },
+      { key: "ma_exit", label: "Trend-exit enabled", path: "exit.ma_exit", type: "boolselect", help: "Master on/off switch for the trend-exit rule below — disabled means only the stop-loss/take-profit can close a position." },
+      { key: "exit_type", label: "Trend-exit rule", path: "exit.type", type: "select", options: ["ma_crossover", "donchian_low"], showIf: (v) => v.ma_exit !== "false", help: "ma_crossover exits the first day price closes back below its MA; donchian_low exits the first day price closes below its N-day low (more tolerant of pullbacks)." },
+      { key: "exit_breakout_period", label: "Donchian exit period (days)", path: "exit.exit_breakout_period", type: "number", showIf: (v) => v.ma_exit !== "false" && v.exit_type === "donchian_low", help: "Lookback window for the donchian_low trend-exit rule's N-day low." },
+      { key: "stop_loss_pct", label: "Stop-loss (%)", path: "exit.stop_loss_pct", type: "number", step: "0.5", showIf: (v) => v.sizing_method !== "atr_unit", help: "Flat-percent stop-loss below entry price. Only used when sizing method is pct — atr_unit mode uses stop distance × ATR instead (Risk & sizing section)." },
+      { key: "take_profit_pct", label: "Take-profit (%, blank = disabled)", path: "exit.take_profit_pct", type: "number", step: "0.5", nullable: true, help: "Flat-percent take-profit above entry price. Blank means only stops and the trend-exit rule can close a winner." },
     ],
   },
   {
     title: "Risk & sizing",
     fields: [
       { key: "sizing_method", label: "Sizing method", path: "risk.sizing_method", type: "select", options: ["pct", "atr_unit"], help: "pct sizes every position the same % of equity. atr_unit (Turtle-style) sizes by volatility — calmer tickers get bigger positions for the same dollar risk — and is required for pyramiding." },
-      { key: "atr_period", label: "ATR period (days)", path: "risk.atr_period", type: "number", help: "Lookback window for ATR (\"N\"), the volatility measure atr_unit sizing and ATR-based stops are built on." },
-      { key: "risk_pct_per_unit", label: "Risk per unit (% of equity)", path: "risk.risk_pct_per_unit", type: "number", step: "0.1", help: "% of equity risked on one unit, atr_unit sizing only — position size = (this % of equity) ÷ (stop distance in $)." },
-      { key: "stop_atr_multiple", label: "Stop distance (× ATR/N)", path: "risk.stop_atr_multiple", type: "number", step: "0.1", help: "Stop-loss distance from entry, in multiples of ATR/N, atr_unit sizing only." },
+      { key: "atr_period", label: "ATR period (days)", path: "risk.atr_period", type: "number", showIf: (v) => v.sizing_method === "atr_unit" || v.trailing_stop_enabled === "true", help: "Lookback window for ATR (\"N\"), the volatility measure atr_unit sizing and the trailing stop are built on." },
+      { key: "risk_pct_per_unit", label: "Risk per unit (% of equity)", path: "risk.risk_pct_per_unit", type: "number", step: "0.1", showIf: (v) => v.sizing_method === "atr_unit", help: "% of equity risked on one unit, atr_unit sizing only — position size = (this % of equity) ÷ (stop distance in $)." },
+      { key: "stop_atr_multiple", label: "Stop distance (× ATR/N)", path: "risk.stop_atr_multiple", type: "number", step: "0.1", showIf: (v) => v.sizing_method === "atr_unit", help: "Stop-loss distance from entry, in multiples of ATR/N, atr_unit sizing only." },
       { key: "max_position_pct", label: "Max position size (% of equity)", path: "risk.max_position_pct", type: "number", step: "1", help: "Hard cap on any single ticker's position size, regardless of what the sizing formula would otherwise produce." },
       { key: "max_invested_pct", label: "Max total invested (% of equity)", path: "risk.max_invested_pct", type: "number", step: "1", help: "Hard cap on total capital deployed across all open positions at once." },
     ],
@@ -66,16 +79,16 @@ const FIELD_GROUPS = [
   {
     title: "Pyramiding",
     fields: [
-      { key: "pyramiding_enabled", label: "Pyramiding enabled", path: "risk.pyramiding.enabled", type: "boolselect", help: "Allows adding more units to an already-open, winning position as price moves further in its favor. Requires atr_unit sizing." },
-      { key: "pyramiding_unit_interval_n", label: "Add unit every N moved further (× ATR)", path: "risk.pyramiding.unit_interval_n", type: "number", step: "0.1", help: "Price must move this many multiples of ATR/N further in the position's favor (since the LAST unit's own entry) before another unit is added." },
-      { key: "pyramiding_max_units", label: "Max units per position", path: "risk.pyramiding.max_units", type: "number", help: "Ceiling on how many units one position can stack up to." },
+      { key: "pyramiding_enabled", label: "Pyramiding enabled", path: "risk.pyramiding.enabled", type: "boolselect", showIf: (v) => v.sizing_method === "atr_unit", help: "Allows adding more units to an already-open, winning position as price moves further in its favor. Requires atr_unit sizing (Risk & sizing section)." },
+      { key: "pyramiding_unit_interval_n", label: "Add unit every N moved further (× ATR)", path: "risk.pyramiding.unit_interval_n", type: "number", step: "0.1", showIf: (v) => v.sizing_method === "atr_unit" && v.pyramiding_enabled === "true", help: "Price must move this many multiples of ATR/N further in the position's favor (since the LAST unit's own entry) before another unit is added." },
+      { key: "pyramiding_max_units", label: "Max units per position", path: "risk.pyramiding.max_units", type: "number", showIf: (v) => v.sizing_method === "atr_unit" && v.pyramiding_enabled === "true", help: "Ceiling on how many units one position can stack up to." },
     ],
   },
   {
     title: "Trailing stop",
     fields: [
       { key: "trailing_stop_enabled", label: "Trailing stop enabled", path: "risk.trailing_stop.enabled", type: "boolselect", help: "Adds a second stop that trails up behind the position's peak price (never down), on top of the regular stop-loss — whichever stop is tighter wins." },
-      { key: "trailing_stop_atr_multiple", label: "Trailing distance (× ATR/N)", path: "risk.trailing_stop.atr_multiple", type: "number", step: "0.1", help: "How far behind the peak price the trailing stop sits, in multiples of ATR/N." },
+      { key: "trailing_stop_atr_multiple", label: "Trailing distance (× ATR/N)", path: "risk.trailing_stop.atr_multiple", type: "number", step: "0.1", showIf: (v) => v.trailing_stop_enabled === "true", help: "How far behind the peak price the trailing stop sits, in multiples of ATR/N." },
     ],
   },
 ];
@@ -169,7 +182,17 @@ export default function BacktestPage() {
   }
 
   function coerceField(f, raw) {
-    if (raw === undefined || raw === "") return null; // blank means null in the config (take_profit_pct, choppiness_threshold)
+    if (raw === undefined || raw === "") {
+      // Only the two fields explicitly marked nullable (take_profit_pct,
+      // choppiness_threshold) treat blank as a real "set this to null"
+      // value -- everything else (ma_period, stop_loss_pct, etc.) is a
+      // required number in the config, and run_backtest.py crashes on
+      // None there (its lookback_days = max(...) call has no None
+      // handling). Every other field is always pre-filled with a real
+      // value anyway, so blank on one of those means "skip -- leave
+      // whatever the base config already had," not "null it out."
+      return f.nullable ? null : undefined;
+    }
     if (f.type === "number") return Number(raw);
     if (f.type === "boolselect") return raw === "true";
     return raw; // text, date, select
@@ -248,7 +271,7 @@ export default function BacktestPage() {
         }
       >
         <form onSubmit={handleSubmit}>
-          <label style={labelStyle}>Base config</label>
+          <label style={labelStyle}>Base config <span style={{ color: "var(--negative)" }}>*</span></label>
           <select value={baseConfig} onChange={(e) => setBaseConfig(e.target.value)} style={inputStyle}>
             {BASE_CONFIGS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
@@ -265,12 +288,14 @@ export default function BacktestPage() {
           {baseError && <div style={{ color: "var(--negative)", fontSize: 12, marginTop: 6 }}>{baseError}</div>}
           <div style={{ color: "var(--text-faint)", fontSize: 11, marginTop: 6 }}>
             Every field below is pre-filled from this config — edit whatever you want to change, leave the rest as-is.
+            Fields marked <span style={{ color: "var(--negative)" }}>*</span> are required whenever shown; unmarked fields can be left blank.
+            Fields that only matter for a particular choice elsewhere (e.g. the entry rule, or sizing method) only appear once that choice is selected.
           </div>
 
           <div style={{ marginTop: 20 }}>
             <div style={groupTitleStyle}>General</div>
             <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>Watchlist</label>
+              <label style={labelStyle}>Watchlist <span style={{ color: "var(--negative)" }}>*</span></label>
               <TickerPicker
                 selected={selectedTickers}
                 onChange={setSelectedTickers}
@@ -283,10 +308,12 @@ export default function BacktestPage() {
           </div>
 
           {FIELD_GROUPS.slice(1).map((group) => (
-            <div key={group.title} style={{ marginTop: 20 }}>
-              <div style={groupTitleStyle}>{group.title}</div>
-              <FieldGrid fields={group.fields} values={fields} onChange={updateField} />
-            </div>
+            visibleFields(group.fields, fields).length > 0 && (
+              <div key={group.title} style={{ marginTop: 20 }}>
+                <div style={groupTitleStyle}>{group.title}</div>
+                <FieldGrid fields={group.fields} values={fields} onChange={updateField} />
+              </div>
+            )
           ))}
 
           <label style={{ ...labelStyle, marginTop: 20 }}>
@@ -312,13 +339,18 @@ export default function BacktestPage() {
           />
 
           <div style={{ display: "flex", gap: 10 }}>
-            <button type="submit" disabled={submitting} style={{ ...submitButtonStyle, width: "auto", flex: 1 }}>
-              {submitting ? "Submitting…" : "Run backtest"}
+            {/* Also disabled while the base config is still loading -- submitting
+                before that async pre-fill resolves would send blank fields for
+                everything, which used to mean "null out ma_period etc." and
+                crash run_backtest.py; fixed at the source (coerceField above),
+                but this closes the race that could trigger it in the first place. */}
+            <button type="submit" disabled={submitting || loadingBase} style={{ ...submitButtonStyle, width: "auto", flex: 1 }}>
+              {submitting ? "Submitting…" : loadingBase ? "Loading base config…" : "Run backtest"}
             </button>
             <button
               type="button"
               onClick={handleExport}
-              disabled={exporting}
+              disabled={exporting || loadingBase}
               style={{ ...submitButtonStyle, width: "auto", flex: 1, background: "var(--surface-raised)", color: "var(--text-primary)", border: "1px solid var(--border)" }}
             >
               {exporting ? "Exporting…" : "Export config (.yaml)"}
@@ -367,12 +399,19 @@ export default function BacktestPage() {
   );
 }
 
+function visibleFields(fields, values) {
+  return fields.filter((f) => !f.showIf || f.showIf(values));
+}
+
 function FieldGrid({ fields, values, onChange }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "14px 16px" }}>
-      {fields.map((f) => (
+      {visibleFields(fields, values).map((f) => (
         <div key={f.key}>
-          <label style={labelStyle}>{f.label}</label>
+          <label style={labelStyle}>
+            {f.label}
+            {!f.nullable && <span style={{ color: "var(--negative)" }}> *</span>}
+          </label>
           {f.type === "select" || f.type === "boolselect" ? (
             <select value={values[f.key] ?? ""} onChange={(e) => onChange(f.key, e.target.value)} style={inputStyle}>
               {f.type === "boolselect"
