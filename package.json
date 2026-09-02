@@ -1,0 +1,9 @@
+{
+  "name": "trading-project-root",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Root package.json exists only so Vercel's Node runtime can resolve api/sell.js's one npm dependency, now that this project's Vercel Root Directory is the repo root instead of dashboard/. The actual dashboard app lives in dashboard/ with its own package.json -- see vercel.json's buildCommand.",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

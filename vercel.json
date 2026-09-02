@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install && npm --prefix dashboard install",
+  "buildCommand": "npm --prefix dashboard run build",
+  "outputDirectory": "dashboard/dist",
+  "functions": {
+    "api/run_backtest.py": {
+      "maxDuration": 120
+    }
+  }
+}

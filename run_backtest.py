@@ -9,6 +9,14 @@ Usage:
     python run_backtest.py --save --label "v2"                # save with a run label
     python run_backtest.py --config config/strategy_v2.yaml   # use a different config file
     python run_backtest.py --chart                           # also write an HTML chart report
+
+run_backtest_for_config() below is the reusable core -- takes an
+already-parsed config dict rather than a file path, so it can be called
+directly (no subprocess, no CLI arg parsing) from anywhere that already
+has a config in memory. api/run_backtest.py (the dashboard's Backtest
+page, running as a Vercel Python function) is the other caller -- same
+function, same behavior, so a dashboard-triggered run and a
+command-line run of the identical config can never silently diverge.
 """
 import sys
 import os
@@ -28,24 +36,47 @@ from strategy import rules, portfolio_selection
 from backtest import engine
 
 
-def main():
-    use_synthetic = "--synthetic" in sys.argv
-    save_to_supabase = "--save" in sys.argv
-    make_chart = "--chart" in sys.argv
-    run_label = None
-    if "--label" in sys.argv:
-        idx = sys.argv.index("--label")
-        if idx + 1 < len(sys.argv):
-            run_label = sys.argv[idx + 1]
+class NoDataError(RuntimeError):
+    """Raised when one or more tickers came back with no usable price data."""
 
-    config_path = "config/strategy.yaml"
-    if "--config" in sys.argv:
-        idx = sys.argv.index("--config")
-        if idx + 1 < len(sys.argv):
-            config_path = sys.argv[idx + 1]
 
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
+def run_backtest_for_config(
+    cfg: dict,
+    run_label: str = None,
+    save_to_supabase: bool = False,
+    make_chart: bool = False,
+    use_synthetic: bool = False,
+    label_hint: str = "config",
+    verbose: bool = True,
+    report_dir: str = "results",
+) -> dict:
+    """
+    Runs one backtest for an already-parsed config dict and returns
+    result (the dict from backtest.engine.run_backtest, i.e. "trades",
+    "metrics", "equity_curve") plus "report_url" (the uploaded report's
+    public URL, or None if make_chart/save_to_supabase weren't both
+    set, or the upload failed -- see the try/except below).
+
+    label_hint is used only as a fallback report filename/backtest_runs
+    label when run_label isn't given (e.g. the CLI's own config
+    filename) -- purely cosmetic, no behavior depends on it otherwise.
+
+    report_dir defaults to "results" (this repo's usual local output
+    folder, relative to cwd) -- callers running somewhere with a
+    read-only source tree (e.g. api/run_backtest.py on Vercel, whose
+    deployed filesystem can't be written to outside /tmp) should pass
+    an explicit writable directory instead. Same reasoning applies to
+    data/fetcher.py's on-disk cache, which such a caller should point
+    at a writable directory too (see api/run_backtest.py).
+
+    Raises NoDataError if any ticker has no usable data for the
+    requested range -- callers decide how to surface that (the CLI
+    exits 1 with a message; the Vercel API function turns it into a
+    400 response).
+    """
+    def log(msg):
+        if verbose:
+            print(msg)
 
     tickers = portfolio_selection.universe_tickers(cfg)
     start = cfg["backtest"]["start_date"]
@@ -79,8 +110,8 @@ def main():
     ) + 30
     fetch_start = (dt.date.fromisoformat(start) - dt.timedelta(days=lookback_days * 2)).isoformat()  # *2 for weekends/holidays
 
-    print(f"{'[SYNTHETIC DATA]' if use_synthetic else '[REAL DATA]'} Using {config_path} — {universe_note} "
-          f"from {start} to {end} (fetching from {fetch_start} for {lookback_days}-trading-day warm-up)...")
+    log(f"{'[SYNTHETIC DATA]' if use_synthetic else '[REAL DATA]'} {universe_note} "
+        f"from {start} to {end} (fetching from {fetch_start} for {lookback_days}-trading-day warm-up)...")
 
     if use_synthetic:
         price_data = synthetic.generate_watchlist(tickers, fetch_start, end)
@@ -91,12 +122,13 @@ def main():
     # the backtest engine if any ticker came back with no usable data
     # for the requested range.
     for ticker, df in price_data.items():
-        print(f"  {ticker}: {len(df)} rows ({df.index.min().date() if not df.empty else 'n/a'} to {df.index.max().date() if not df.empty else 'n/a'})")
+        log(f"  {ticker}: {len(df)} rows ({df.index.min().date() if not df.empty else 'n/a'} to {df.index.max().date() if not df.empty else 'n/a'})")
     empty_tickers = [t for t, df in price_data.items() if df.empty]
     if empty_tickers:
-        print(f"\nERROR: no data for {empty_tickers} in range {start} to {end}.")
-        print("Try: delete data/cache/ and rerun, or check the ticker symbols and dates are valid.")
-        sys.exit(1)
+        raise NoDataError(
+            f"no data for {empty_tickers} in range {start} to {end}. "
+            f"Try: delete data/cache/ and rerun, or check the ticker symbols and dates are valid."
+        )
 
     signals = {t: rules.generate_signals(df, cfg) for t, df in price_data.items()}
 
@@ -113,92 +145,126 @@ def main():
             spy_df = fetcher.fetch("SPY", fetch_start, end)
             benchmark_returns = spy_df.loc[start:end, "Close"].pct_change().dropna()
         except Exception as e:
-            print(f"  Note: SPY benchmark fetch failed ({e}) — beta/alpha will be None this run.")
+            log(f"  Note: SPY benchmark fetch failed ({e}) — beta/alpha will be None this run.")
 
-    print("Running backtest...")
+    log("Running backtest...")
     result = engine.run_backtest(price_data, signals, cfg, benchmark_returns=benchmark_returns)
 
-    print("\n=== METRICS ===")
+    log("\n=== METRICS ===")
     for k, v in result["metrics"].items():
-        print(f"  {k}: {v}")
+        log(f"  {k}: {v}")
 
-    print(f"\n=== TRADES ({len(result['trades'])}) ===")
+    log(f"\n=== TRADES ({len(result['trades'])}) ===")
     for t in result["trades"][:20]:
-        print(f"  {t['ticker']}: {t['entry_date'].date()} @ {t['entry_price']:.2f} -> "
-              f"{t['exit_date'].date()} @ {t['exit_price']:.2f}  "
-              f"({t['return_pct']:+.2f}%, {t['exit_reason']})")
+        log(f"  {t['ticker']}: {t['entry_date'].date()} @ {t['entry_price']:.2f} -> "
+            f"{t['exit_date'].date()} @ {t['exit_price']:.2f}  "
+            f"({t['return_pct']:+.2f}%, {t['exit_reason']})")
         if t.get("entry_log"):
-            print(f"      {t['entry_log']}")
+            log(f"      {t['entry_log']}")
         if t.get("exit_log"):
-            print(f"      {t['exit_log']}")
+            log(f"      {t['exit_log']}")
     if len(result["trades"]) > 20:
-        print(f"  ... and {len(result['trades']) - 20} more")
+        log(f"  ... and {len(result['trades']) - 20} more")
 
     blocked = result.get("blocked_signals") or []
     if blocked:
-        print(f"\n=== CIRCUIT BREAKER ({len(blocked)} signal(s) blocked) ===")
+        log(f"\n=== CIRCUIT BREAKER ({len(blocked)} signal(s) blocked) ===")
         for b in blocked[:10]:
-            print(f"  {b['ticker']} on {b['date'].date()}: {b['reason']}")
+            log(f"  {b['ticker']} on {b['date'].date()}: {b['reason']}")
         if len(blocked) > 10:
-            print(f"  ... and {len(blocked) - 10} more")
+            log(f"  ... and {len(blocked) - 10} more")
 
     rebalances = result.get("rebalance_log") or []
     if rebalances:
-        print(f"\n=== PORTFOLIO SELECTION ({len(rebalances)} rebalance(s)) ===")
+        log(f"\n=== PORTFOLIO SELECTION ({len(rebalances)} rebalance(s)) ===")
         for r in rebalances:
             added = f", +{r['added']}" if r["added"] else ""
             dropped = f", -{r['dropped']}" if r["dropped"] else ""
-            print(f"  {r['date'].date()}: {r['selected']}{added}{dropped}")
+            log(f"  {r['date'].date()}: {r['selected']}{added}{dropped}")
 
     pyramid_adds = result.get("pyramid_log") or []
     if pyramid_adds:
-        print(f"\n=== PYRAMIDING ({len(pyramid_adds)} unit(s) added) ===")
+        log(f"\n=== PYRAMIDING ({len(pyramid_adds)} unit(s) added) ===")
         for p in pyramid_adds[:20]:
-            print(f"  {p['date'].date()}: {p['log']}")
+            log(f"  {p['date'].date()}: {p['log']}")
         if len(pyramid_adds) > 20:
-            print(f"  ... and {len(pyramid_adds) - 20} more")
+            log(f"  ... and {len(pyramid_adds) - 20} more")
 
     store = None
     if save_to_supabase:
         from storage.supabase_client import SupabaseStore
-        print("\nSaving to Supabase...")
+        log("\nSaving to Supabase...")
         store = SupabaseStore()
         run = store.save_backtest_run(cfg, result["metrics"], run_label=run_label)
         if run:
             store.save_trades(result["trades"], source="backtest", backtest_run_id=run["id"])
-            print(f"  Saved as backtest_runs.id = {run['id']} ({len(result['trades'])} trades)")
+            log(f"  Saved as backtest_runs.id = {run['id']} ({len(result['trades'])} trades)")
 
+    report_url = None
     if make_chart:
         import report
-        safe_label = (run_label or os.path.splitext(os.path.basename(config_path))[0]).replace(" ", "_")
-        out_path = os.path.join("results", f"{safe_label}_report.html")
+        safe_label = (run_label or label_hint).replace(" ", "_")
+        out_path = os.path.join(report_dir, f"{safe_label}_report.html")
         # Trim off the pre-start_date warm-up buffer for the chart only --
         # the engine needs it for indicator lookback, but the chart should
         # show the actual requested period, not the extra history fetched
         # to warm it up.
         chart_price_data = {t: df.loc[start:end] for t, df in price_data.items()}
         report.generate_html_report(result, cfg, chart_price_data, run_label or safe_label, out_path)
-        print(f"\nWrote chart report to {out_path}")
+        log(f"\nWrote chart report to {out_path}")
 
         # Uploaded (not just written locally) whenever Supabase is also in
-        # play -- a GitHub Actions runner's filesystem disappears when the
-        # job ends, so the local file alone is useless to anyone outside
-        # that run. object_name matches out_path's own basename exactly so
-        # the dashboard can construct the same public URL from a run_label
-        # alone (see storage/supabase_client.py's upload_report). Fails
-        # open (warns, doesn't raise) -- the backtest itself already
-        # succeeded and its metrics/trades are already saved by this
-        # point, so a missing/misconfigured Storage bucket (e.g. it
-        # hasn't been created yet -- see README's Supabase setup step 4)
-        # shouldn't mark the whole run as failed over a report nobody's
-        # blocked on.
+        # play -- a GitHub Actions runner's (or Vercel function's)
+        # filesystem disappears when the job ends, so the local file
+        # alone is useless to anyone outside that run. object_name
+        # matches out_path's own basename exactly so a caller can
+        # construct the same public URL from a run_label alone (see
+        # storage/supabase_client.py's upload_report). Fails open (warns,
+        # doesn't raise) -- the backtest itself already succeeded and its
+        # metrics/trades are already saved by this point, so a
+        # missing/misconfigured Storage bucket (e.g. it hasn't been
+        # created yet -- see README's Supabase setup step 4) shouldn't
+        # mark the whole run as failed over a report nobody's blocked on.
         if store:
             try:
                 report_url = store.upload_report(out_path, os.path.basename(out_path))
-                print(f"  Uploaded report: {report_url}")
+                log(f"  Uploaded report: {report_url}")
             except Exception as e:
-                print(f"  Note: report upload failed ({e}) -- metrics/trades were still saved above. "
-                      f"Check that the '{store.REPORTS_BUCKET}' Storage bucket exists and is public.")
+                log(f"  Note: report upload failed ({e}) -- metrics/trades were still saved above. "
+                    f"Check that the '{store.REPORTS_BUCKET}' Storage bucket exists and is public.")
+
+    result["report_url"] = report_url
+    return result
+
+
+def main():
+    use_synthetic = "--synthetic" in sys.argv
+    save_to_supabase = "--save" in sys.argv
+    make_chart = "--chart" in sys.argv
+    run_label = None
+    if "--label" in sys.argv:
+        idx = sys.argv.index("--label")
+        if idx + 1 < len(sys.argv):
+            run_label = sys.argv[idx + 1]
+
+    config_path = "config/strategy.yaml"
+    if "--config" in sys.argv:
+        idx = sys.argv.index("--config")
+        if idx + 1 < len(sys.argv):
+            config_path = sys.argv[idx + 1]
+
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    print(f"Using {config_path}")
+    try:
+        result = run_backtest_for_config(
+            cfg, run_label=run_label, save_to_supabase=save_to_supabase, make_chart=make_chart,
+            use_synthetic=use_synthetic, label_hint=os.path.splitext(os.path.basename(config_path))[0],
+        )
+    except NoDataError as e:
+        print(f"\nERROR: {e}")
+        sys.exit(1)
 
     return result
 

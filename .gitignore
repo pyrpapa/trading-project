@@ -3,6 +3,11 @@ data/cache/
 __pycache__/
 *.pyc
 .DS_Store
+# Root-level node_modules -- exists now that /api/sell.js needs
+# @supabase/supabase-js resolved from a root package.json (Vercel's
+# Root Directory is the repo root; dashboard/node_modules stays covered
+# by dashboard/.gitignore separately, unaffected by this one).
+node_modules/
 
 # Generated backtest artifacts (HTML chart reports, CSV/markdown exports).
 # These are fully regeneratable from a config file + `python run_backtest.py
