@@ -158,6 +158,7 @@ def main():
         if len(pyramid_adds) > 20:
             print(f"  ... and {len(pyramid_adds) - 20} more")
 
+    store = None
     if save_to_supabase:
         from storage.supabase_client import SupabaseStore
         print("\nSaving to Supabase...")
@@ -178,6 +179,26 @@ def main():
         chart_price_data = {t: df.loc[start:end] for t, df in price_data.items()}
         report.generate_html_report(result, cfg, chart_price_data, run_label or safe_label, out_path)
         print(f"\nWrote chart report to {out_path}")
+
+        # Uploaded (not just written locally) whenever Supabase is also in
+        # play -- a GitHub Actions runner's filesystem disappears when the
+        # job ends, so the local file alone is useless to anyone outside
+        # that run. object_name matches out_path's own basename exactly so
+        # the dashboard can construct the same public URL from a run_label
+        # alone (see storage/supabase_client.py's upload_report). Fails
+        # open (warns, doesn't raise) -- the backtest itself already
+        # succeeded and its metrics/trades are already saved by this
+        # point, so a missing/misconfigured Storage bucket (e.g. it
+        # hasn't been created yet -- see README's Supabase setup step 4)
+        # shouldn't mark the whole run as failed over a report nobody's
+        # blocked on.
+        if store:
+            try:
+                report_url = store.upload_report(out_path, os.path.basename(out_path))
+                print(f"  Uploaded report: {report_url}")
+            except Exception as e:
+                print(f"  Note: report upload failed ({e}) -- metrics/trades were still saved above. "
+                      f"Check that the '{store.REPORTS_BUCKET}' Storage bucket exists and is public.")
 
     return result
 
