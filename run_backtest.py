@@ -225,15 +225,23 @@ def run_backtest_for_config(
         # missing/misconfigured Storage bucket (e.g. it hasn't been
         # created yet -- see README's Supabase setup step 4) shouldn't
         # mark the whole run as failed over a report nobody's blocked on.
+        report_error = None
         if store:
             try:
                 report_url = store.upload_report(out_path, os.path.basename(out_path))
                 log(f"  Uploaded report: {report_url}")
             except Exception as e:
-                log(f"  Note: report upload failed ({e}) -- metrics/trades were still saved above. "
-                    f"Check that the '{store.REPORTS_BUCKET}' Storage bucket exists and is public.")
+                report_error = (
+                    f"{e} -- check that the '{store.REPORTS_BUCKET}' Storage bucket exists and is public"
+                )
+                log(f"  Note: report upload failed ({report_error}) -- metrics/trades were still saved above.")
 
     result["report_url"] = report_url
+    # Only set when make_chart was on AND the upload specifically failed --
+    # callers (api/run_backtest.py) surface this in the response instead of
+    # a bare unexplained "no report," which used to be a print()-only,
+    # Vercel-function-logs-only detail with no way to see it from the UI.
+    result["report_error"] = report_error if make_chart else None
     return result
 
 

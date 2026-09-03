@@ -211,6 +211,7 @@ class handler(BaseHTTPRequestHandler):
                 "end_date": cfg["backtest"]["end_date"],
                 "metrics": result["metrics"],
                 "report_url": result.get("report_url"),
+                "report_error": result.get("report_error"),
             }
 
         response = {"ok": True}

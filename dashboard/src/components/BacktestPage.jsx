@@ -116,6 +116,30 @@ function toFieldString(value) {
   return String(value);
 }
 
+// localStorage, not Supabase -- per-browser convenience only, never a
+// real history feature. Wrapped in try/catch throughout: private
+// browsing, disabled site data, or a full quota should degrade to "no
+// persistence," never break the page.
+const RESULTS_STORAGE_KEY = "backtestPage.lastResults";
+
+function loadPersistedResults() {
+  try {
+    const raw = localStorage.getItem(RESULTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistResults(value) {
+  try {
+    if (value) localStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(value));
+    else localStorage.removeItem(RESULTS_STORAGE_KEY);
+  } catch {
+    // Nothing to do -- storage just isn't available this session.
+  }
+}
+
 export default function BacktestPage() {
   const [baseConfig, setBaseConfig] = useState(BASE_CONFIGS[0].value);
   const [customPath, setCustomPath] = useState("");
@@ -137,9 +161,16 @@ export default function BacktestPage() {
   // api/run_backtest.py runs synchronously and returns metrics directly
   // -- no dispatch-and-poll dance, so this is just the last response,
   // not a running history. { custom: {run_label, metrics, report_url},
-  // compare: {...} } | null. Cleared on every new submit so a stale
-  // pair's results don't linger next to a fresh one.
-  const [results, setResults] = useState(null);
+  // compare: {...} } | null. Overwritten (not appended to) on every new
+  // submit -- deliberately never a running list, per request ("doesn't
+  // need to maintain large history"). Persisted to localStorage (this
+  // browser only, not Supabase) purely so a reload doesn't throw away
+  // the one result you were just looking at.
+  const [results, setResultsState] = useState(loadPersistedResults);
+  function setResults(value) {
+    setResultsState(value);
+    persistResults(value);
+  }
   const [loadingBase, setLoadingBase] = useState(false);
   const [baseError, setBaseError] = useState(null);
 
@@ -431,7 +462,10 @@ export default function BacktestPage() {
       </Panel>
 
       <div style={{ marginTop: 12 }}>
-        <Panel title={results ? `Results vs. ${results.compareName}` : "Results"}>
+        <Panel
+          title={results ? `Results vs. ${results.compareName}` : "Results"}
+          action={results && <button onClick={() => setResults(null)} style={refreshButtonStyle}>Clear</button>}
+        >
           {!results ? (
             <Empty text='Run a backtest above to compare it against another config over the same window (defaults to master, changeable in "Compare against").' />
           ) : (
@@ -453,6 +487,8 @@ export default function BacktestPage() {
                 }),
                 r.report_url ? (
                   <a href={r.report_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View</a>
+                ) : r.report_error ? (
+                  <span style={{ color: "var(--negative)", cursor: "help" }} title={r.report_error}>failed *</span>
                 ) : (
                   <span style={{ color: "var(--text-faint)" }}>—</span>
                 ),
