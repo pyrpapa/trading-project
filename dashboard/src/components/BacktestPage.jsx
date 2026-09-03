@@ -120,7 +120,12 @@ function metricRowCells(r) {
         : typeof v === "number" ? v.toFixed(2) : v;
     }),
     r.report_url ? (
-      <a href={r.report_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View</a>
+      // Through api/report.js, not r.report_url (Supabase's own public
+      // URL) directly -- linking straight to Storage rendered the report
+      // as raw HTML source text instead of a page, because the object
+      // wasn't reliably served with a text/html content-type. The proxy
+      // re-serves the same content with that header set explicitly.
+      <a href={`/api/report?label=${encodeURIComponent(r.run_label)}`} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View</a>
     ) : r.report_error ? (
       <span style={{ color: "var(--negative)", cursor: "help" }} title={r.report_error}>failed *</span>
     ) : (
@@ -274,6 +279,29 @@ export default function BacktestPage() {
     if (!runLabel) return;
     setSavedLabels((prev) => {
       const next = prev.includes(runLabel) ? prev.filter((l) => l !== runLabel) : [...prev, runLabel];
+      persistSavedLabels(next);
+      return next;
+    });
+  }
+
+  // Permanently deletes the run from Supabase (backtest_runs + its
+  // trades, cascaded -- see migration 005) -- distinct from toggleSave's
+  // "unsave," which only removes it from this browser's local list
+  // without touching the underlying data. Confirmed with a plain native
+  // confirm() rather than the app's usual inline-confirm pattern (used
+  // for the Sell button): this is backtest metadata, not a real trade,
+  // materially lower stakes.
+  async function handleDelete(runLabel) {
+    if (!runLabel) return;
+    if (!window.confirm(`Permanently delete "${runLabel}" from Supabase? This can't be undone.`)) return;
+    const { error: deleteError } = await supabase.from("backtest_runs").delete().eq("run_label", runLabel);
+    if (deleteError) {
+      setError(`Couldn't delete "${runLabel}": ${deleteError.message}`);
+      return;
+    }
+    setSavedRuns((prev) => prev.filter((r) => r.run_label !== runLabel));
+    setSavedLabels((prev) => {
+      const next = prev.filter((l) => l !== runLabel);
       persistSavedLabels(next);
       return next;
     });
@@ -561,11 +589,14 @@ export default function BacktestPage() {
             <Empty text='Click "☆ Save" on a result above to keep it here — survives reloads, stays a short list you curate yourself, not a running history of every run.' />
           ) : (
             <Table
-              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report", "Save"]}
+              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report", ""]}
               rows={savedRuns.map((r) => [
                 r.run_label || `#${r.id}`,
                 ...metricRowCells(r),
-                <button onClick={() => toggleSave(r.run_label)} style={refreshButtonStyle}>★ Saved</button>,
+                <span style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => toggleSave(r.run_label)} style={refreshButtonStyle}>Unsave</button>
+                  <button onClick={() => handleDelete(r.run_label)} style={{ ...refreshButtonStyle, borderColor: "var(--negative)", color: "var(--negative)" }}>Delete</button>
+                </span>,
               ])}
             />
           )}
