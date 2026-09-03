@@ -5,9 +5,11 @@ Way of the Turtle's own performance charts), an R-multiple distribution,
 and per-ticker price charts with buy/sell markers pulled straight from
 the trade journal.
 
-Not wired into run_backtest.py's Supabase save path — this works
-entirely from the in-memory backtest result, so it's fast to regenerate
-while you're experimenting with a config. Usage:
+Works entirely from the in-memory backtest result, so it's fast to
+regenerate while you're experimenting with a config. Called from
+run_backtest.py's own --chart flag (run_backtest_for_config()), which
+also uploads the result to Supabase Storage when --save is used too —
+see storage/supabase_client.py's upload_report. Usage:
 
     python run_backtest.py --chart
     python run_backtest.py --config config/strategy_v5_n_sizing.yaml --chart --label "v5-n-sizing"
