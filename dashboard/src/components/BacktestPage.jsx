@@ -104,6 +104,31 @@ const METRIC_LABELS = {
   sortino_ratio: "Sortino", alpha_pct: "Alpha", n_trades: "Trades",
 };
 
+// Shared by both the live "Results vs. X" table and the "Saved
+// backtests" table below it -- same row shape either way (watchlist,
+// window, the metric columns, a report link/status), just the Run-label
+// and Save-button cells differ per caller.
+function metricRowCells(r) {
+  return [
+    (r.watchlist || []).join(", "),
+    `${r.start_date} → ${r.end_date}`,
+    ...METRIC_COLS.map((c) => {
+      const v = r.metrics?.[c];
+      if (v == null) return "—";
+      return c.includes("pct") // covers total_return_pct, max_drawdown_pct, alpha_pct
+        ? <span style={{ color: pnlColor(v) }}>{fmtPct(v)}</span>
+        : typeof v === "number" ? v.toFixed(2) : v;
+    }),
+    r.report_url ? (
+      <a href={r.report_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View</a>
+    ) : r.report_error ? (
+      <span style={{ color: "var(--negative)", cursor: "help" }} title={r.report_error}>failed *</span>
+    ) : (
+      <span style={{ color: "var(--text-faint)" }}>—</span>
+    ),
+  ];
+}
+
 function getPath(obj, dottedPath) {
   return dottedPath.split(".").reduce((node, key) => (node == null ? undefined : node[key]), obj);
 }
@@ -116,25 +141,31 @@ function toFieldString(value) {
   return String(value);
 }
 
-// localStorage, not Supabase -- per-browser convenience only, never a
-// real history feature. Wrapped in try/catch throughout: private
-// browsing, disabled site data, or a full quota should degrade to "no
-// persistence," never break the page.
-const RESULTS_STORAGE_KEY = "backtestPage.lastResults";
+// Explicit save, not auto-persisted history: every run already lands in
+// Supabase's backtest_runs table regardless (save_to_supabase=True in
+// api/run_backtest.py) -- that's the real, durable storage. What's
+// local here is just the small LIST of run_labels you've chosen to
+// keep around, in this browser's localStorage. Clicking "Save" adds a
+// label to this list and the row gets re-fetched from Supabase (by
+// run_label, never a broad history query) on every future page load,
+// however many runs happen in between. Wrapped in try/catch
+// throughout: private browsing/disabled site data degrades to "saving
+// doesn't persist," never breaks the page.
+const SAVED_LABELS_KEY = "backtestPage.savedLabels";
 
-function loadPersistedResults() {
+function loadSavedLabels() {
   try {
-    const raw = localStorage.getItem(RESULTS_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const raw = localStorage.getItem(SAVED_LABELS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-function persistResults(value) {
+function persistSavedLabels(labels) {
   try {
-    if (value) localStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(value));
-    else localStorage.removeItem(RESULTS_STORAGE_KEY);
+    localStorage.setItem(SAVED_LABELS_KEY, JSON.stringify(labels));
   } catch {
     // Nothing to do -- storage just isn't available this session.
   }
@@ -162,15 +193,16 @@ export default function BacktestPage() {
   // -- no dispatch-and-poll dance, so this is just the last response,
   // not a running history. { custom: {run_label, metrics, report_url},
   // compare: {...} } | null. Overwritten (not appended to) on every new
-  // submit -- deliberately never a running list, per request ("doesn't
-  // need to maintain large history"). Persisted to localStorage (this
-  // browser only, not Supabase) purely so a reload doesn't throw away
-  // the one result you were just looking at.
-  const [results, setResultsState] = useState(loadPersistedResults);
-  function setResults(value) {
-    setResultsState(value);
-    persistResults(value);
-  }
+  // submit, and NOT persisted across a reload -- this is deliberately
+  // ephemeral ("what I just ran"); explicitly clicking Save on a row is
+  // what makes something stick around (see savedLabels/savedRuns below).
+  const [results, setResults] = useState(null);
+  // The small local list of run_labels you've marked to keep, and the
+  // actual rows fetched from Supabase for them (by label, not a broad
+  // history query -- see the SAVED_LABELS_KEY comment above).
+  const [savedLabels, setSavedLabels] = useState(loadSavedLabels);
+  const [savedRuns, setSavedRuns] = useState([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
   const [loadingBase, setLoadingBase] = useState(false);
   const [baseError, setBaseError] = useState(null);
 
@@ -212,6 +244,40 @@ export default function BacktestPage() {
   useEffect(() => {
     if (baseConfig !== "__custom__") loadBaseConfig(baseConfig);
   }, [baseConfig, loadBaseConfig]);
+
+  // Re-fetches every time savedLabels changes (on mount, and after every
+  // save/unsave) -- targeted at exactly those labels, never a broad
+  // "recent runs" query, so this stays cheap and small regardless of how
+  // many total backtests have ever been run.
+  useEffect(() => {
+    if (savedLabels.length === 0) {
+      setSavedRuns([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSaved(true);
+    supabase
+      .from("backtest_runs")
+      .select("*")
+      .in("run_label", savedLabels)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (!cancelled) setSavedRuns(data ?? []);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSaved(false);
+      });
+    return () => { cancelled = true; };
+  }, [savedLabels]);
+
+  function toggleSave(runLabel) {
+    if (!runLabel) return;
+    setSavedLabels((prev) => {
+      const next = prev.includes(runLabel) ? prev.filter((l) => l !== runLabel) : [...prev, runLabel];
+      persistSavedLabels(next);
+      return next;
+    });
+  }
 
   function watchlistValue() {
     const custom = customTickerText.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -467,31 +533,39 @@ export default function BacktestPage() {
           action={results && <button onClick={() => setResults(null)} style={refreshButtonStyle}>Clear</button>}
         >
           {!results ? (
-            <Empty text='Run a backtest above to compare it against another config over the same window (defaults to master, changeable in "Compare against").' />
+            <Empty text='Run a backtest above to compare it against another config over the same window (defaults to master, changeable in "Compare against"). Nothing here survives a reload unless you Save it below.' />
           ) : (
             <Table
-              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report"]}
+              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report", "Save"]}
               rows={[
                 { ...results.custom, displayLabel: results.custom.run_label },
                 { ...results.compare, displayLabel: `${results.compare.run_label} (${results.compareName})` },
               ].map((r) => [
                 r.displayLabel,
-                (r.watchlist || []).join(", "),
-                `${r.start_date} → ${r.end_date}`,
-                ...METRIC_COLS.map((c) => {
-                  const v = r.metrics?.[c];
-                  if (v == null) return "—";
-                  return c.includes("pct") // covers total_return_pct, max_drawdown_pct, alpha_pct
-                    ? <span style={{ color: pnlColor(v) }}>{fmtPct(v)}</span>
-                    : typeof v === "number" ? v.toFixed(2) : v;
-                }),
-                r.report_url ? (
-                  <a href={r.report_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View</a>
-                ) : r.report_error ? (
-                  <span style={{ color: "var(--negative)", cursor: "help" }} title={r.report_error}>failed *</span>
-                ) : (
-                  <span style={{ color: "var(--text-faint)" }}>—</span>
-                ),
+                ...metricRowCells(r),
+                <button onClick={() => toggleSave(r.run_label)} style={refreshButtonStyle}>
+                  {savedLabels.includes(r.run_label) ? "★ Saved" : "☆ Save"}
+                </button>,
+              ])}
+            />
+          )}
+        </Panel>
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <Panel
+          title="Saved backtests"
+          action={loadingSaved && <span style={{ color: "var(--text-faint)", fontSize: 11 }}>Loading…</span>}
+        >
+          {savedRuns.length === 0 ? (
+            <Empty text='Click "☆ Save" on a result above to keep it here — survives reloads, stays a short list you curate yourself, not a running history of every run.' />
+          ) : (
+            <Table
+              headers={["Run", "Watchlist", "Window", ...METRIC_COLS.map((c) => METRIC_LABELS[c]), "Report", "Save"]}
+              rows={savedRuns.map((r) => [
+                r.run_label || `#${r.id}`,
+                ...metricRowCells(r),
+                <button onClick={() => toggleSave(r.run_label)} style={refreshButtonStyle}>★ Saved</button>,
               ])}
             />
           )}
