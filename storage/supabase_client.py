@@ -57,7 +57,10 @@ class SupabaseStore:
             )
         return self.client.storage.from_(self.REPORTS_BUCKET).get_public_url(object_name)
 
-    def save_backtest_run(self, cfg: dict, metrics: dict, run_label: str = None) -> dict:
+    def save_backtest_run(
+        self, cfg: dict, metrics: dict, run_label: str = None,
+        report_url: str = None, report_error: str = None,
+    ) -> dict:
         row = {
             "run_label": run_label,
             "config": cfg,
@@ -65,6 +68,8 @@ class SupabaseStore:
             "start_date": cfg["backtest"]["start_date"],
             "end_date": cfg["backtest"]["end_date"],
             "metrics": metrics,
+            "report_url": report_url,
+            "report_error": report_error,
         }
         result = self.client.table("backtest_runs").insert(row).execute()
         return result.data[0] if result.data else None
