@@ -193,14 +193,18 @@ def run_backtest_for_config(
     store = None
     if save_to_supabase:
         from storage.supabase_client import SupabaseStore
-        log("\nSaving to Supabase...")
         store = SupabaseStore()
-        run = store.save_backtest_run(cfg, result["metrics"], run_label=run_label)
-        if run:
-            store.save_trades(result["trades"], source="backtest", backtest_run_id=run["id"])
-            log(f"  Saved as backtest_runs.id = {run['id']} ({len(result['trades'])} trades)")
 
+    # Chart generation/upload runs BEFORE save_backtest_run below (not
+    # after, as this used to be ordered) specifically so report_url/
+    # report_error can be included in that row's own INSERT -- previously
+    # the report link only ever existed in this function's return value
+    # (i.e. one caller's live response), never actually persisted, so
+    # anything that re-fetched the row later (the dashboard's "Saved
+    # backtests" panel, reading straight from Supabase) always saw "no
+    # report" even when one had genuinely been generated and uploaded.
     report_url = None
+    report_error = None
     if make_chart:
         import report
         safe_label = (run_label or label_hint).replace(" ", "_")
@@ -220,12 +224,11 @@ def run_backtest_for_config(
         # matches out_path's own basename exactly so a caller can
         # construct the same public URL from a run_label alone (see
         # storage/supabase_client.py's upload_report). Fails open (warns,
-        # doesn't raise) -- the backtest itself already succeeded and its
-        # metrics/trades are already saved by this point, so a
-        # missing/misconfigured Storage bucket (e.g. it hasn't been
-        # created yet -- see README's Supabase setup step 4) shouldn't
-        # mark the whole run as failed over a report nobody's blocked on.
-        report_error = None
+        # doesn't raise) -- a missing/misconfigured Storage bucket (e.g.
+        # it hasn't been created yet -- see README's Supabase setup step
+        # 4) shouldn't block the backtest_runs save below over a report
+        # nobody's blocked on; report_error gets saved right alongside
+        # metrics instead, so the failure reason isn't lost either.
         if store:
             try:
                 report_url = store.upload_report(out_path, os.path.basename(out_path))
@@ -234,13 +237,21 @@ def run_backtest_for_config(
                 report_error = (
                     f"{e} -- check that the '{store.REPORTS_BUCKET}' Storage bucket exists and is public"
                 )
-                log(f"  Note: report upload failed ({report_error}) -- metrics/trades were still saved above.")
+                log(f"  Note: report upload failed ({report_error}).")
+
+    if store:
+        log("\nSaving to Supabase...")
+        run = store.save_backtest_run(
+            cfg, result["metrics"], run_label=run_label, report_url=report_url, report_error=report_error,
+        )
+        if run:
+            store.save_trades(result["trades"], source="backtest", backtest_run_id=run["id"])
+            log(f"  Saved as backtest_runs.id = {run['id']} ({len(result['trades'])} trades)")
 
     result["report_url"] = report_url
     # Only set when make_chart was on AND the upload specifically failed --
     # callers (api/run_backtest.py) surface this in the response instead of
-    # a bare unexplained "no report," which used to be a print()-only,
-    # Vercel-function-logs-only detail with no way to see it from the UI.
+    # a bare unexplained "no report."
     result["report_error"] = report_error if make_chart else None
     return result
 
