@@ -2,6 +2,11 @@
 # refreshed to match the current ETF master; this file previously
 # still held pre-pivot crypto content and had gone stale.
 #
+# Kept in sync with config/strategy_master.yaml's watchlist/risk
+# (correlation_breaker + SLV/NUGT/UTSL added 2026-09-22) -- see that
+# file's own header for the full before/after numbers this promotion
+# was validated against, including this window.
+#
 watchlist:
 - SPXL
 - TQQQ
@@ -10,6 +15,9 @@ watchlist:
 - TNA
 - TECL
 - ERX
+- SLV
+- NUGT
+- UTSL
 entry:
   ma_period: 20
   volume_confirmation: true
@@ -34,6 +42,11 @@ risk:
   trailing_stop:
     enabled: true
     atr_multiple: 1.0
+  correlation_breaker:
+    enabled: true
+    lookback_period: 60
+    correlation_threshold: 0.7
+    max_correlated_positions: 2
 backtest:
   starting_cash: 10000
   start_date: '2023-01-01'
