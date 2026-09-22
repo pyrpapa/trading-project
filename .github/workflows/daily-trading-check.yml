@@ -1,17 +1,21 @@
 name: Daily trading check
 
-# PRIMARY TRIGGER IS EXTERNAL (2026-09-01): the actual daily schedule is
-# now an external cron-job.org job that POSTs to this workflow's
-# `workflow_dispatch` REST endpoint at 10:15 AM America/New_York
-# (DST-aware) every weekday -- NOT the `schedule:` block below. This
-# followed a chronic pattern (documented in that block's own history)
-# of GitHub's native `schedule` trigger firing hours late or not at
-# all, going back to at least early August -- while `workflow_dispatch`
-# has fired instantly every single time it's been tested. The root
-# cause is architectural, not fixable from this repo: `schedule` events
-# go through a separate, platform-wide cron-batch poller shared by
-# every repo on GitHub, while `workflow_dispatch`/API-triggered runs
-# are dispatched directly, bypassing that poller entirely.
+# EXTERNAL TRIGGER ONLY (2026-09-22): the daily schedule is an external
+# cron-job.org job that POSTs to this workflow's `workflow_dispatch`
+# REST endpoint at 10:15 AM America/New_York (DST-aware) every weekday
+# -- see https://console.cron-job.org/dashboard. GitHub's own
+# `schedule:` trigger used to run alongside it as a "harmless backup"
+# but was actually causing this to run twice a day, so it's been
+# removed rather than left in.
+#
+# GitHub's native `schedule` trigger was also chronically unreliable on
+# its own before cron-job.org was set up (hours-late or entirely
+# missing triggers, with no error raised anywhere) -- see git history
+# on this file for that saga. The root cause is architectural, not
+# fixable from this repo: `schedule` events go through a separate,
+# platform-wide cron-batch poller shared by every repo on GitHub, while
+# `workflow_dispatch`/API-triggered runs are dispatched directly,
+# bypassing that poller entirely.
 #
 # The cron-job.org credential (a fine-grained GitHub PAT, Actions:
 # read/write only, scoped to this repo) lives in the cron-job.org
@@ -19,59 +23,14 @@ name: Daily trading check
 # documents it further; ask whoever set it up (see git blame on this
 # comment) if it needs rotating or the account access is lost.
 #
-# `schedule:` below is kept as a free, harmless backup only -- worth
-# leaving on since it costs nothing and occasionally still fires
-# usefully, but should NOT be treated as the thing actually keeping
-# this running day to day anymore. daily-trading-check-watchdog.yml's
-# "no successful run in 20h" check covers BOTH trigger paths equally
-# (it just checks run history, not trigger type), so it still catches
-# a day where cron-job.org itself fails for any reason (account issue,
-# expired token, etc.) too.
+# NOTE: with `schedule:` gone, cron-job.org is the ONLY thing that
+# triggers this daily -- there is no GitHub-side fallback anymore. The
+# README references a daily-trading-check-watchdog.yml that would open
+# an issue if no run succeeds within 20h, but as of this change that
+# workflow was never actually merged (see branch claude/schedule-watchdog,
+# commit aa915d7) -- a silent cron-job.org failure currently has nothing
+# catching it.
 on:
-  schedule:
-    # SIMPLIFIED (2026-08-28): one fixed UTC cron, no DST gate script.
-    #
-    # Previously used two cron entries (one per DST offset) plus a "gate"
-    # step that compared wall-clock ET time against a 09:30-10:30 window
-    # and no-op'd whichever trigger landed outside it -- see git history
-    # for that version. Dropped because that gate couldn't tell "the
-    # wrong-DST trigger firing on time" apart from "the right trigger
-    # firing very late" -- both just look like "ET time is outside the
-    # window" to it. On 2026-08-27, a GitHub Actions platform incident
-    # (see githubstatus.com history around 2026-08-26/27 -- Actions
-    # database saturation, then elevated schedule-dispatch delays)
-    # delivered BOTH cron triggers roughly 9 hours late, and the gate
-    # silently discarded both, leaving the strategy with no live check
-    # for two full trading days and no visible error anywhere.
-    #
-    # 15:00 UTC = 11:00 ET during EDT (roughly mid-Mar to early-Nov) or
-    # 10:00 ET during EST (roughly early-Nov to mid-Mar) -- picked so
-    # EITHER offset lands comfortably inside market hours, past the
-    # opening-auction minute, without any gate logic needed. The
-    # BUY/SELL signal itself is unaffected by exactly when this runs --
-    # it always keys off the last fully-completed daily bar (see
-    # live/run_live.py's module docstring) -- so an hour of DST drift
-    # doesn't change the signal, only the size of the reference-close-
-    # to-live-price gap, which risk.entry_price_guard (config/
-    # strategy_master.yaml) already bounds regardless of cause. A
-    # trigger that lands very late for any reason (GitHub platform
-    # issues included) now just runs late and still executes -- worst
-    # case entry_price_guard or its own "market is closed" check decline
-    # individual trades on stale-gap grounds, same as it already does
-    # for any other late-arriving run. Nothing is silently discarded
-    # anymore.
-    #
-    # MINUTE SHIFTED OFF :00 (2026-08-31): this schedule simply never
-    # fired at all on 2026-08-31 (the first live weekday after merging
-    # the change above) -- no run object was created, no GitHub Actions
-    # incident on record for that window either, unlike the 2026-08-27
-    # miss. GitHub's own docs call out exactly this failure mode: "the
-    # schedule event can be delayed during periods of high load...
-    # including the start of each hour," and recommend scheduling away
-    # from :00 for that reason -- this cron was sitting on the single
-    # most contended minute of every hour, shared with countless other
-    # repos' schedules. Moved to :13, otherwise unchanged.
-    - cron: "13 15 * * 1-5"
   workflow_dispatch:
     inputs:
       strategy_config:
