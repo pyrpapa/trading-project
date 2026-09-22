@@ -181,6 +181,50 @@
 #   python run_backtest.py --config config/strategy_master.yaml --chart --save --label "master-compare"
 #   python blend_backtest.py --chart   # ETF/crypto blend explored before this pivot, kept for reference
 #
+# CORRELATION BREAKER ENABLED + WATCHLIST WIDENED (2026-09-22): a
+# forensic review of a month of live trades found the account's only
+# profitable exits were two MANUAL closes (source=paper LINK/ERX) --
+# every automated exit was either a loss or a negligible trailing-stop
+# save, and several losing positions were open simultaneously in
+# correlated names (SPXL/TQQQ/SOXL/TECL/FAS all share the same broad-
+# market/tech risk factor), so one bad chop day hit all of them at
+# once. risk.correlation_breaker existed in backtest/engine.py and
+# live/run_live.py already but was never turned on in this config --
+# capping simultaneous exposure to correlated positions (max 2 above a
+# 0.7 trailing correlation, 60-day lookback) tested as a clean, broad
+# win across all 4 standard windows:
+#   2019-2024:         Calmar 0.943 -> 1.264, DD -27.08% -> -21.54%, alpha 12.91 -> 16.76
+#   2020-2022 crisis:  Calmar 0.956 -> 1.165, DD -21.91% -> -19.64%, alpha 10.68 -> 14.62
+#   2023-2026 crisis:  Calmar 0.802 -> 0.902, DD -35.93% -> -29.44%, alpha  5.70 ->  6.84
+#   last-12mo:         Calmar 4.662 -> 4.435, DD -13.80% -> -13.26%, alpha 33.60 -> 31.73 (only window with a small give-back)
+#
+# SLV (silver) was already flagged as a promising candidate by a prior
+# session's holdout_test.py blind test (improved Calmar/Sortino/alpha
+# in 3/4 windows on its own, not curve-fit to any live period). NUGT
+# (3x gold miners) and UTSL (3x utilities) were added this session as
+# new, genuinely different sector bets (materials, defensive/rate-
+# sensitive) -- each tested INDIVIDUALLY alongside SLV before combining
+# them, isolate-one-variable style: NUGT drives most of the 2023-2026
+# improvement, UTSL drives most of the 2020-2022 improvement, neither
+# is dead weight riding on the other. Combined with the correlation
+# breaker above, across all 4 standard windows:
+#   2019-2024:         Calmar 1.264 -> 1.051, DD -21.54% -> -23.99%  (small give-back, still well above the pre-change baseline)
+#   2020-2022 crisis:  Calmar 1.165 -> 1.617, DD -19.64% -> -18.96%
+#   2023-2026 crisis:  Calmar 0.902 -> 1.065, DD -29.44% -> -33.09%
+#   last-12mo:         Calmar 4.435 -> 8.668, DD -13.26% -> -14.13%
+# Every window ends at or clearly above the pre-correlation-breaker
+# baseline on Calmar, and trade count went UP in every window (985 /
+# 430 / 605 / 178 vs. the original baseline's 870 / 394 / 519 / 152) --
+# this doesn't come at the cost of fewer trades taken.
+#
+# NOT YET BUILT: a way to dynamically shift between this diversified
+# posture and a more concentrated/momentum one depending on detected
+# market regime was discussed and deliberately deferred -- a real
+# regime detector needs its own honest walk-forward validation (tuning
+# its on/off threshold by staring at these same 4 windows would be
+# worse overfitting than anything else tried this session, not less),
+# not something to bolt on alongside this change.
+#
 # To actually run this against Alpaca paper trading:
 #   python live/run_live.py --dry-run --config config/strategy_master.yaml
 #   python live/run_live.py --config config/strategy_master.yaml
@@ -193,6 +237,9 @@ watchlist:
   - TNA
   - TECL
   - ERX
+  - SLV
+  - NUGT
+  - UTSL
 
 entry:
   ma_period: 20
@@ -220,6 +267,17 @@ risk:
   trailing_stop:
     enabled: true
     atr_multiple: 1.0
+  # CORRELATION BREAKER (2026-09-22): see header comment above for the
+  # full before/after numbers across all 4 standard windows. Blocks a
+  # new entry/pyramid-add if it would push the count of simultaneously-
+  # open, mutually-correlated positions (trailing 60-day correlation
+  # above 0.7) past max_correlated_positions -- existing open positions
+  # are never force-closed by this, it only gates new exposure.
+  correlation_breaker:
+    enabled: true
+    lookback_period: 60
+    correlation_threshold: 0.7
+    max_correlated_positions: 2
   # ENTRY PRICE GUARD (2026-08-20): live/run_live.py-only (backtest has no
   # concept of a closed market or a live quote diverging from the signal
   # close, so this key is inert there). Added after a paper BUY on TECL/ERX
