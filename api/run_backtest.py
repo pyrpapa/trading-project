@@ -19,12 +19,31 @@ dashboard/ frontend still build correctly under this root.
 
 POST /api/run_backtest
 Header: Authorization: Bearer <supabase access_token>
+
+Two request shapes are accepted:
+
+1. The Backtest page's simplified config editor (see api/config_template.py
+   and dashboard/src/components/BacktestPage.jsx) sends the edited YAML
+   text directly and always gets it compared against the real, current
+   live config automatically -- no separate "compare" spec needed:
+{
+  "rawConfigYaml": "...edited config text...",
+  "runLabel": "..."
+}
+   -> runs `rawConfigYaml` as "custom" and config/strategy_master.yaml
+   (unmodified, same start_date/end_date/starting_cash as the edited
+   config so the comparison is apples-to-apples) as "compare",
+   automatically.
+
+2. The older field-by-field shape (kept working underneath, unused by
+   the current UI but not removed -- nothing else depends on removing it):
 {
   "custom":  {"baseConfig": "...", "formFields": {...}, "advancedYaml": "...", "runLabel": "..."},
   "compare": {"baseConfig": "...", "formFields": {...}, "runLabel": "..."},   # omit to skip
   "exportOnly": false   # true: return configYaml for each, run nothing
 }
-->
+
+Both shapes ->
 {
   "ok": true,
   "custom":  {"run_label": "...", "metrics": {...}, "report_url": "..." | null},
@@ -116,6 +135,20 @@ def deep_merge(base, override):
     return result
 
 
+LIVE_CONFIG_PATH = "config/strategy_master.yaml"
+
+
+def build_raw_config(raw_yaml: str) -> dict:
+    """Parses a submitted config directly (the simplified editor's
+    request shape) -- no field-mapping, no base-config merge, just
+    validated as-is. Same "must be a mapping" check as advanced_yaml
+    in build_config below."""
+    cfg = yaml.safe_load(raw_yaml)
+    if not isinstance(cfg, dict):
+        raise ValueError("Config must be a YAML mapping (e.g. `watchlist:\n  - SPXL`), not a bare value or list")
+    return cfg
+
+
 def build_config(base_config_path, form_fields, advanced_yaml):
     base_config_path = os.path.normpath(base_config_path)
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -190,11 +223,9 @@ class handler(BaseHTTPRequestHandler):
 
         export_only = bool(payload.get("exportOnly"))
 
-        def run_one(spec):
-            cfg = build_config(spec.get("baseConfig"), spec.get("formFields") or {}, spec.get("advancedYaml") or "")
+        def run_cfg(cfg, run_label):
             if export_only:
                 return {"configYaml": yaml.dump(cfg)}
-            run_label = spec.get("runLabel") or None
             result = run_backtest_for_config(
                 cfg,
                 run_label=run_label,
@@ -214,15 +245,37 @@ class handler(BaseHTTPRequestHandler):
                 "report_error": result.get("report_error"),
             }
 
+        def run_spec(spec):
+            cfg = build_config(spec.get("baseConfig"), spec.get("formFields") or {}, spec.get("advancedYaml") or "")
+            return run_cfg(cfg, spec.get("runLabel") or None)
+
         response = {"ok": True}
         try:
-            if "custom" in payload:
-                response["custom"] = run_one(payload["custom"])
-            if "compare" in payload:
-                response["compare"] = run_one(payload["compare"])
+            if "rawConfigYaml" in payload:
+                custom_cfg = build_raw_config(payload["rawConfigYaml"])
+                run_label = payload.get("runLabel") or None
+                response["custom"] = run_cfg(custom_cfg, run_label)
+
+                # Auto-comparison against the real, current live config --
+                # same window/starting cash as the edited config, so it's
+                # apples-to-apples, otherwise completely unmodified.
+                with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), LIVE_CONFIG_PATH)) as f:
+                    live_cfg = yaml.safe_load(f)
+                live_cfg = dict(live_cfg)
+                live_cfg["backtest"] = dict(live_cfg["backtest"])
+                live_cfg["backtest"]["start_date"] = custom_cfg["backtest"]["start_date"]
+                live_cfg["backtest"]["end_date"] = custom_cfg["backtest"]["end_date"]
+                live_cfg["backtest"]["starting_cash"] = custom_cfg["backtest"]["starting_cash"]
+                compare_label = f"{run_label}-vs-live" if run_label else None
+                response["compare"] = run_cfg(live_cfg, compare_label)
+            else:
+                if "custom" in payload:
+                    response["custom"] = run_spec(payload["custom"])
+                if "compare" in payload:
+                    response["compare"] = run_spec(payload["compare"])
         except NoDataError as e:
             return self._send_json(400, {"error": str(e)})
-        except (ValueError, FileNotFoundError) as e:
+        except (ValueError, FileNotFoundError, KeyError) as e:
             return self._send_json(400, {"error": str(e)})
         except Exception as e:
             return self._send_json(500, {"error": str(e)})
