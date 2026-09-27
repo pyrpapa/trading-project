@@ -145,6 +145,29 @@ class AlpacaBroker:
         order = self.client.submit_order(MarketOrderRequest(**kwargs))
         return {"id": str(order.id), "symbol": _from_alpaca_symbol(order.symbol, order.asset_class), "side": side, "status": str(order.status)}
 
+    def wait_for_fill(self, order_id: str, timeout_s: float = 30.0, poll_s: float = 0.5) -> bool:
+        """
+        Polls an order until it's filled. Returns True once filled, False if
+        it's still open after `timeout_s` (or ended canceled/rejected/expired
+        without filling). Used before re-buying a ticker that was just sold
+        in the same run: Alpaca rejects a BUY while an opposite-side market
+        order on the same symbol is still open ("potential wash trade
+        detected") -- what crashed the 2026-09-24 live run.
+        """
+        import time
+        from alpaca.trading.enums import OrderStatus
+
+        deadline = time.monotonic() + timeout_s
+        while True:
+            status = self.client.get_order_by_id(order_id).status
+            if status == OrderStatus.FILLED:
+                return True
+            if status in (OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_s)
+
     def is_market_open(self, symbol: str) -> bool:
         """
         Whether `symbol` can be traded RIGHT NOW. Crypto trades 24/7 so is

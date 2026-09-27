@@ -195,7 +195,7 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     elif entry_type == "donchian_breakout":
         # Buy whenever price closes above the highest high of the prior
         # breakout_period days — a genuine new price extreme, not a
-        # smoothed average crossing. Unlike the MA rule below, this isn't
+        # smoothed average crossing. Like the MA rule below, this isn't
         # restricted to the FIRST day the condition is true: any day price
         # closes above that rolling threshold is a valid Turtle-style
         # breakout signal. That can't cause a duplicate entry — the
@@ -203,9 +203,25 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         # an open position.
         buy_signal = (df["Close"] > df["donchian_high"]) & vol_ok
     else:
-        # Buy signal: price crosses above MA (wasn't above yesterday) + volume confirms
-        crossed_up = above_ma & (~above_ma.shift(1).fillna(False))
-        buy_signal = crossed_up & vol_ok
+        # Buy signal: ANY day price closes above its MA with volume
+        # confirming -- not just the first day of the cross. Held tickers
+        # are skipped by the engine/live runner, so in practice this
+        # matters for (re-)entering a trend that's already underway, most
+        # of all right after a stop-out.
+        #
+        # This was written as a first-day-only crossover
+        # (`above_ma & ~above_ma.shift(1).fillna(False)`), but under
+        # pandas 3 that expression silently evaluates as "any day above":
+        # shift() without fill_value yields an object column, `~` turns
+        # its bools into the ints -1/-2, and pandas 3's `&` treats both as
+        # truthy. Every documented backtest result for strategy_master.yaml
+        # was produced under that "any day" behavior, and it's what live
+        # has been trading. A genuine first-day-only rule was re-tested
+        # 2026-09-27 across the 4 standard windows and is much worse
+        # (Calmar 1.06->0.80, 1.62->0.30, 1.08->0.82, 8.67->2.36), so the
+        # validated behavior is now written out explicitly instead of
+        # depending on a pandas quirk.
+        buy_signal = above_ma & vol_ok
 
     # Regime filter (optional, see add_indicators) -- don't take the fast
     # entry signal unless price is ALSO above a much slower moving
@@ -248,20 +264,22 @@ def generate_signals(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     # which type), same as before.
     exit_type = exit_cfg.get("type", "ma_crossover")
     if exit_cfg["ma_exit"]:
+        # Both exit rules fire on ANY day the condition holds, not only
+        # the first -- same pandas-3 history as the entry rule above (the
+        # old first-day-only expression evaluated as "any day" there too).
+        # Only matters while a position is open; backtests are identical
+        # either way, and "any day" is the safer live behavior since a
+        # skipped/failed run can't make the exit miss its one chance.
         if exit_type == "donchian_low":
-            # Exit the first day price closes below the lowest Low of the
-            # PRIOR exit_breakout_period days — a genuine new short-term
-            # low, not a smoothed-average crossing. Structurally more
-            # tolerant of ordinary pullbacks within an intact trend than
-            # the MA-crossunder rule below, since price has to actually
-            # revisit a real prior support level, not just dip under its
-            # own trailing mean.
-            below_low = df["Close"] < df["donchian_low"]
-            crossed_below_low = below_low & (~below_low.shift(1).fillna(False))
-            sell_signal = crossed_below_low
+            # Exit when price closes below the lowest Low of the PRIOR
+            # exit_breakout_period days — a genuine new short-term low,
+            # not a smoothed-average crossing. Structurally more tolerant
+            # of ordinary pullbacks within an intact trend than the MA rule
+            # below, since price has to actually revisit a real prior
+            # support level, not just dip under its own trailing mean.
+            sell_signal = df["Close"] < df["donchian_low"]
         else:
-            crossed_down = below_ma & (~below_ma.shift(1).fillna(False))
-            sell_signal = crossed_down
+            sell_signal = below_ma
     else:
         sell_signal = pd.Series(False, index=df.index)
 
