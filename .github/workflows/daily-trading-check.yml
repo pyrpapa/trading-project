@@ -59,7 +59,11 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           STRATEGY_CONFIG: ${{ inputs.strategy_config || 'config/strategy_master.yaml' }}
-        run: python live/run_live.py
+        # Explicit `shell: bash` runs with -o pipefail, so tee doesn't mask
+        # run_live.py's exit code. -u keeps stdout/stderr interleaved in
+        # order in live.log (uploaded below on failure).
+        shell: bash
+        run: python -u live/run_live.py 2>&1 | tee live.log
 
       - name: Upload log on failure
         if: failure()

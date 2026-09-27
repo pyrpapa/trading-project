@@ -331,6 +331,42 @@ def main():
             print(f"  Note: live quote for {ticker} unavailable ({e}) — using last daily close (${fallback_price:.2f}) instead.")
             return fallback_price
 
+    # One rejected order must never take down the whole run: on 2026-09-24
+    # Alpaca rejected a single BUY ("potential wash trade detected") and
+    # the uncaught APIError killed the run AFTER real orders had already
+    # filled -- every remaining ticker went unchecked and none of that
+    # day's actions reached the signals table. Failed orders are now
+    # logged and skipped; the run still exits non-zero at the end (see
+    # bottom of main) so the failure stays visible in GitHub Actions.
+    order_errors = []
+
+    # Returns the broker's order dict (always truthy; True in dry-run), or
+    # None if the order was rejected.
+    def submit_order(ticker, place):
+        if dry_run:
+            return True
+        try:
+            return place()
+        except Exception as e:
+            print(f"  ORDER FAILED {ticker}: {e} -- skipped, continuing with the rest of the run")
+            order_errors.append((ticker, str(e)))
+            return None
+
+    # ticker -> order id of a sell placed earlier in THIS run. A stopped-out
+    # ticker whose BUY signal still holds gets re-bought in the same run,
+    # exactly as backtest/engine.py does on the same bar (blocking that was
+    # re-tested 2026-09-27 and backtests clearly worse) -- but only once
+    # its sell has actually filled; see AlpacaBroker.wait_for_fill.
+    sell_order_ids = {}
+
+    # Each action is written to the signals table the moment its order
+    # succeeds, not batched at the end -- so an unexpected crash later in
+    # the run can't erase the record of orders that already went through.
+    def record_action(action_type, ticker, reason, price):
+        actions.append((action_type, ticker, reason, price))
+        if store and not dry_run:
+            store.save_signal(ticker, dt.date.today(), action_type, price, reason=reason)
+
     # exited_tickers tracks which of today's open positions just got closed
     # in this same cycle, so the correlation breaker check (further down)
     # only counts positions that are STILL open by the time entries are
@@ -378,12 +414,16 @@ def main():
             exit_log = journal.format_exit(ticker, current_price, change_pct, exit_reason_detail, r_multiple=None)
             print(f"  EXIT {ticker}: {change_pct:+.2f}% ({exit_reason}, {len(open_units) or 1} unit(s))")
             print(f"    {exit_log}")
-            actions.append(("SELL", ticker, exit_reason_detail, current_price))
+            sell_order = submit_order(ticker, lambda: broker.close_position(ticker))
+            if not sell_order:
+                continue
+            if not dry_run:
+                sell_order_ids[ticker] = sell_order["id"]
+            record_action("SELL", ticker, exit_reason_detail, current_price)
             exited_tickers.add(ticker)
             cash_remaining += pos["market_value"]
             invested_value -= pos["market_value"]
             if not dry_run:
-                broker.close_position(ticker)
                 if store:
                     # open_units already covers this (find_open_trades has no
                     # unit_number filter, so it returns single-unit positions
@@ -480,9 +520,10 @@ def main():
             add_log = journal.format_pyramid_add(ticker, unit_number, pyramid_max_units, current_price, sizing_note=sizing_note)
             print(f"  PYRAMID ADD {ticker}: unit {unit_number}/{pyramid_max_units}, ${allocation:,.2f} @ ~${current_price:.2f}")
             print(f"    {add_log}")
-            actions.append(("BUY", ticker, add_reason, current_price))
+            if not submit_order(ticker, lambda: broker.submit_market_order(ticker, notional_usd=allocation, side="buy")):
+                continue
+            record_action("BUY", ticker, add_reason, current_price)
             if not dry_run:
-                broker.submit_market_order(ticker, notional_usd=allocation, side="buy")
                 store.open_trade(
                     ticker, entry_date=dt.date.today(), entry_price=current_price, shares=shares,
                     source="paper", entry_reason=add_reason, entry_log=add_log,
@@ -597,13 +638,25 @@ def main():
             risk_per_share = current_price * (stop_loss_pct_cfg / 100) if stop_loss_pct_cfg else None
         initial_risk_dollars = risk_per_share * (allocation / current_price) if risk_per_share else None
 
+        if ticker in sell_order_ids:
+            try:
+                sell_filled = broker.wait_for_fill(sell_order_ids[ticker])
+            except Exception as e:
+                print(f"  Note: couldn't check {ticker}'s sell order status ({e})")
+                sell_filled = False
+            if not sell_filled:
+                print(f"  Skipping BUY {ticker}: this run's sell of {ticker} hasn't filled yet "
+                      f"-- Alpaca would reject the buy as a potential wash trade")
+                continue
+
         entry_reason = sig_df["reason"].iloc[-1]
         entry_log = journal.format_entry(ticker, current_price, entry_reason, sizing_note=sizing_note)
         print(f"  BUY {ticker}: ${allocation:,.2f} @ ~${current_price:.2f}")
         print(f"    {entry_log}")
-        actions.append(("BUY", ticker, entry_reason, current_price))
+        if not submit_order(ticker, lambda: broker.submit_market_order(ticker, notional_usd=allocation, side="buy")):
+            continue
+        record_action("BUY", ticker, entry_reason, current_price)
         if not dry_run:
-            broker.submit_market_order(ticker, notional_usd=allocation, side="buy")
             if store:
                 shares = allocation / current_price
                 store.open_trade(
@@ -617,10 +670,14 @@ def main():
     if not actions:
         print("No actions today.")
 
-    if store:
-        for action_type, ticker, reason, price in actions:
-            store.save_signal(ticker, dt.date.today(), action_type, price, reason=reason)
+    if store and not dry_run:
         print(f"Logged {len(actions)} action(s) to Supabase.")
+
+    if order_errors:
+        print(f"\n{len(order_errors)} order(s) FAILED this run:")
+        for ticker, err in order_errors:
+            print(f"  {ticker}: {err}")
+        sys.exit(1)
 
     return actions
 
