@@ -72,3 +72,43 @@ jobs:
           name: run-log
           path: live.log
           if-no-files-found: ignore
+
+  # Trend + dip-buy blend (config/strategy_blend.yaml) on its OWN Alpaca
+  # paper account -- runs alongside master off the same daily trigger, so
+  # no second cron-job.org job is needed. Independent of the master job:
+  # either can fail without stopping the other. Skips (green) until the
+  # ALPACA_BLEND_* secrets exist.
+  run-blend-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run blend check
+        env:
+          ALPACA_BLEND_API_KEY: ${{ secrets.ALPACA_BLEND_API_KEY }}
+          ALPACA_BLEND_SECRET_KEY: ${{ secrets.ALPACA_BLEND_SECRET_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$ALPACA_BLEND_API_KEY" ]; then
+            echo "ALPACA_BLEND_API_KEY secret not set -- blend not enabled yet, skipping." | tee blend.log
+            exit 0
+          fi
+          python -u live/run_blend.py 2>&1 | tee blend.log
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blend-log
+          path: blend.log
+          if-no-files-found: ignore

@@ -1,0 +1,45 @@
+# Trend + dip-buy blend -- paper-traded on its OWN Alpaca paper account
+# (live/run_blend.py), alongside strategy_master.yaml on the original one.
+#
+# Picked 2026-09-27 via strategy_lab.py for the project's "small, steady
+# gains" goal: the only candidate that held up in all 6 test periods
+# (4 dev windows + the 2012-2018 and 2006-2011 holdouts), under realistic
+# next-open fills and 0.05%/side costs:
+#   Calmar 0.51-2.64, max drawdown never worse than -8.4%,
+#   62-75% of months positive, ~4-11% a year.
+# It will lag plain buy-and-hold SPY in strong bull markets -- that's the
+# price of the smoothness. Both holdouts are now spent, so changing the
+# numbers below can't be validated honestly on history; the live paper
+# record is the test from here.
+#
+# Two sleeves, each sized off its share of total account equity. They
+# never trade against each other: overlapping orders in one ticker are
+# netted into a single order per run (see live/run_blend.py).
+
+trend:
+  # Hold each ETF while its close is above its N-day average, cash
+  # otherwise. Unleveraged, spanning asset classes that tend to trend at
+  # different times.
+  weight: 0.5
+  universe: [SPY, QQQ, IWM, EFA, EEM, TLT, IEF, GLD, DBC, VNQ]
+  ma_period: 200
+  # Inverse-volatility sizing: each position gets
+  # target_position_vol_pct / (its realized annual vol) of the sleeve,
+  # capped at max_position_pct -- so every holding adds similar risk.
+  target_position_vol_pct: 4.0
+  vol_lookback_days: 60
+  max_position_pct: 30.0
+  max_invested_pct: 99.0
+
+dip:
+  # Connors-style short-term mean reversion: buy after a sharp 2-day
+  # selloff (RSI(rsi_period) < rsi_below) while still above the long
+  # average; sell on the first close back above the short average.
+  weight: 0.5
+  tickers: [SPY, QQQ]
+  trend_ma_period: 200
+  rsi_period: 2
+  rsi_below: 10
+  exit_ma_period: 5
+  max_position_pct: 49.5
+  max_invested_pct: 99.0

@@ -13,6 +13,10 @@ import BacktestPage from "./components/BacktestPage.jsx";
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = signed out
   const [view, setView] = useState("dashboard"); // "dashboard" | "backtest"
+  // Which live paper strategy to show -- rows are tagged by the `strategy`
+  // column (supabase/migrations/007). The blend's trades are split into
+  // its two sleeves, so it matches on both.
+  const [strategy, setStrategy] = useState("master"); // "master" | "blend"
   const [data, setData] = useState({
     snapshots: [],
     openTrades: [],
@@ -29,20 +33,21 @@ export default function App() {
 
   useEffect(() => {
     if (session) fetchAll();
-  }, [session]);
+  }, [session, strategy]);
 
   async function fetchAll() {
     setLoadingData(true);
+    const tradeStrategies = strategy === "blend" ? ["blend_trend", "blend_dip"] : ["master"];
     const [{ data: snapshots }, { data: openTrades }, { data: closedTrades }, { data: signals }] = await Promise.all([
-      supabase.from("account_snapshots").select("*").order("created_at", { ascending: true }).limit(200),
-      supabase.from("trades").select("*").is("exit_date", null).order("entry_date", { ascending: false }),
+      supabase.from("account_snapshots").select("*").eq("strategy", strategy).order("created_at", { ascending: true }).limit(200),
+      supabase.from("trades").select("*").in("strategy", tradeStrategies).is("exit_date", null).order("entry_date", { ascending: false }),
       // Closed trades -- joined client-side against `signals` SELL rows
       // in SignalsFeed to show realized $ P&L per exit. A pyramided
       // stack exits as several trades rows sharing one exit_date (one
       // per unit, see live/run_live.py), so SignalsFeed sums these by
       // (ticker, exit_date) rather than assuming a 1:1 row match.
-      supabase.from("trades").select("*").not("exit_date", "is", null).order("exit_date", { ascending: false }).limit(100),
-      supabase.from("signals").select("*").order("signal_date", { ascending: false }).limit(15),
+      supabase.from("trades").select("*").in("strategy", tradeStrategies).not("exit_date", "is", null).order("exit_date", { ascending: false }).limit(100),
+      supabase.from("signals").select("*").eq("strategy", strategy).order("signal_date", { ascending: false }).limit(15),
     ]);
     setData({
       snapshots: snapshots ?? [],
@@ -68,7 +73,8 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <StatusBar
         mode="paper"
-        strategyLabel="ma-crossover"
+        strategy={strategy}
+        onStrategyChange={setStrategy}
         lastCheck={latestSnapshot?.created_at}
         onSignOut={() => supabase.auth.signOut()}
         view={view}
@@ -93,7 +99,7 @@ export default function App() {
           </div>
 
           <div style={{ display: "flex", gap: 12, padding: "20px 24px 24px 24px", flexWrap: "wrap" }}>
-            <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} />
+            <PositionsTable openTrades={data.openTrades} accessToken={session.access_token} canSell={strategy === "master"} />
             <SignalsFeed signals={data.signals} closedTrades={data.closedTrades} />
           </div>
         </>

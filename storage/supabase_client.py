@@ -16,7 +16,7 @@ import json
 
 
 class SupabaseStore:
-    def __init__(self, url: str = None, key: str = None):
+    def __init__(self, url: str = None, key: str = None, strategy: str = "master"):
         url = url or os.environ.get("SUPABASE_URL")
         key = key or os.environ.get("SUPABASE_SERVICE_KEY")
 
@@ -32,6 +32,11 @@ class SupabaseStore:
             raise RuntimeError("Run: pip install supabase")
 
         self.client = create_client(url, key)
+        # Which live strategy's rows this store reads and writes (the
+        # `strategy` column, supabase/migrations/007). Methods also take
+        # an explicit strategy= for sub-strategies like the blend's two
+        # sleeves ('blend_trend' / 'blend_dip').
+        self.strategy = strategy
 
     # Bucket for report.py's generated HTML reports -- must exist already
     # and be set PUBLIC in the Supabase dashboard (Storage -> New bucket),
@@ -103,8 +108,10 @@ class SupabaseStore:
         for i in range(0, len(rows), 500):
             self.client.table("trades").insert(rows[i:i + 500]).execute()
 
-    def save_signal(self, ticker: str, signal_date, signal_type: str, price: float, reason: str = None) -> dict:
+    def save_signal(self, ticker: str, signal_date, signal_type: str, price: float, reason: str = None,
+                    strategy: str = None) -> dict:
         row = {
+            "strategy": strategy or self.strategy,
             "ticker": ticker,
             "signal_date": str(signal_date.date()) if hasattr(signal_date, "date") else str(signal_date),
             "signal_type": signal_type,
@@ -123,8 +130,10 @@ class SupabaseStore:
         self, ticker: str, entry_date, entry_price: float, shares: float, source: str = "paper",
         entry_reason: str = None, entry_log: str = None,
         sizing_method: str = None, initial_risk_dollars: float = None, unit_number: int = 1,
+        strategy: str = None,
     ) -> dict:
         row = {
+            "strategy": strategy or self.strategy,
             "ticker": ticker,
             "source": source,
             "entry_date": str(entry_date.date()) if hasattr(entry_date, "date") else str(entry_date),
@@ -160,6 +169,7 @@ class SupabaseStore:
         result = (
             self.client.table("trades")
             .select("*")
+            .eq("strategy", self.strategy)
             .eq("ticker", ticker)
             .eq("source", source)
             .is_("exit_date", "null")
@@ -181,6 +191,7 @@ class SupabaseStore:
         query = (
             self.client.table("trades")
             .select("*")
+            .eq("strategy", self.strategy)
             .eq("ticker", ticker)
             .eq("source", source)
             .not_.is_("exit_date", "null")
@@ -203,6 +214,7 @@ class SupabaseStore:
         result = (
             self.client.table("trades")
             .select("*")
+            .eq("strategy", self.strategy)
             .eq("ticker", ticker)
             .eq("source", source)
             .is_("exit_date", "null")
@@ -211,8 +223,23 @@ class SupabaseStore:
         )
         return result.data or []
 
-    def save_account_snapshot(self, equity: float, cash: float, portfolio_value: float, buying_power: float, mode: str = "paper") -> dict:
+    def find_all_open_trades(self, strategy: str, source: str = "paper") -> list:
+        """Every open trade row for one strategy/sleeve, across all tickers."""
+        result = (
+            self.client.table("trades")
+            .select("*")
+            .eq("strategy", strategy)
+            .eq("source", source)
+            .is_("exit_date", "null")
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return result.data or []
+
+    def save_account_snapshot(self, equity: float, cash: float, portfolio_value: float, buying_power: float,
+                              mode: str = "paper", strategy: str = None) -> dict:
         row = {
+            "strategy": strategy or self.strategy,
             "equity": float(equity),
             "cash": float(cash),
             "portfolio_value": float(portfolio_value),
