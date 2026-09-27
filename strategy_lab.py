@@ -18,7 +18,8 @@ project is small, steady gains, which Calmar alone doesn't capture.
 
 Usage:
     python strategy_lab.py                 # 4 development windows
-    python strategy_lab.py --holdout       # 2012-2018 holdout only
+    python strategy_lab.py --holdout       # 2012-2018 holdout (spent on round 1)
+    python strategy_lab.py --holdout2      # 2006-2011 holdout (reserved for round 2)
     python strategy_lab.py --only master,spy_200d
 """
 import copy
@@ -35,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from backtest import engine
 from data import fetcher
-from strategy import portfolio_selection, rules
+from strategy import blend, portfolio_selection, rules
 
 warnings.filterwarnings("ignore")
 
@@ -46,6 +47,11 @@ DEV_WINDOWS = {
     "last-12mo": ("2025-08-15", "2026-08-15"),
 }
 HOLDOUT_WINDOWS = {"holdout-2012-2018": ("2012-01-01", "2018-12-31")}
+# Second, fresh holdout (reserved 2026-09-27 after the first was spent on
+# round-1 candidates). Covers the 2008 crash. Most 3x ETFs didn't exist
+# yet, so it only suits strategies built on plain ETFs. Run it once, at
+# the end of a round (--holdout2).
+HOLDOUT2_WINDOWS = {"holdout-2006-2011": ("2006-01-01", "2011-12-31")}
 WARMUP_DAYS = 560  # calendar days -- covers the 252-day momentum lookback plus buffer
 
 REALISTIC = {"commission_pct": 0.05, "execution": "next_open"}
@@ -190,6 +196,75 @@ def dip_buy(start, end, tickers=("SPY", "QQQ")):
     return run(data, signals, simple_cfg(start, end, 99.0 / len(data)))
 
 
+def rotation(start, end, tickers, pick, monthly=False, reason="rotation"):
+    """Holds exactly one ticker at a time: `pick(closes, date)` returns
+    which, from a DataFrame of every ticker's closes up to that date.
+    monthly=True only re-decides at month ends (fewer, slower switches)."""
+    data = fetch(tickers, start, end)
+    closes = pd.DataFrame({t: df["Close"] for t, df in data.items()}).dropna()
+    choice = pd.Series(index=closes.index, dtype=object)
+    for i, date in enumerate(closes.index):
+        if i < 260:
+            continue
+        choice.iloc[i] = pick(closes.iloc[: i + 1])
+    if monthly:
+        me = month_ends(closes.index)
+        choice = choice.where(me).ffill()
+    signals = {t: signal_frame(closes.index, choice == t, choice.notna() & (choice != t), reason)
+               for t in data}
+    return run({t: df.loc[closes.index] for t, df in data.items()}, signals, simple_cfg(start, end, 99.0))
+
+
+def spy_200d_safe(start, end):
+    """SPY while it's above its 200-day average, otherwise short-term
+    Treasuries (SHY) instead of zero-yield cash."""
+    return rotation(start, end, ["SPY", "SHY"],
+                    lambda c: "SPY" if c["SPY"].iloc[-1] > c["SPY"].iloc[-200:].mean() else "SHY",
+                    reason="SPY vs its 200-day average")
+
+
+def faber_monthly(start, end):
+    """Faber (2007): SPY vs its 10-month (~210-day) average, checked only
+    at month ends; SHY otherwise."""
+    return rotation(start, end, ["SPY", "SHY"],
+                    lambda c: "SPY" if c["SPY"].iloc[-1] > c["SPY"].iloc[-210:].mean() else "SHY",
+                    monthly=True, reason="SPY vs its 10-month average (monthly)")
+
+
+def dual_momentum(start, end):
+    """Antonacci's Global Equities Momentum: monthly, if US stocks' 12-month
+    return beats T-bills' (SHY), hold whichever of US (SPY) or
+    international (EFA) stocks has the stronger 12-month return;
+    otherwise hold aggregate bonds (AGG)."""
+    def pick(c):
+        ret = c.iloc[-1] / c.iloc[-253] - 1
+        if ret["SPY"] <= ret["SHY"]:
+            return "AGG"
+        return "SPY" if ret["SPY"] >= ret["EFA"] else "EFA"
+    return rotation(start, end, ["SPY", "EFA", "AGG", "SHY"], pick, monthly=True, reason="dual momentum")
+
+
+def _blend_cfg():
+    with open("config/strategy_blend.yaml") as f:
+        return yaml.safe_load(f)
+
+
+def blend_trend_sleeve(start, end):
+    """Trend sleeve exactly as live/run_blend.py trades it (strategy/blend.py)."""
+    cfg = _blend_cfg()["trend"]
+    data = fetch(cfg["universe"], start, end)
+    signals = {t: blend.trend_signals(df, cfg) for t, df in data.items()}
+    return run(data, signals, blend.engine_cfg(cfg, start, end, "inverse_vol"))
+
+
+def blend_dip_sleeve(start, end):
+    """Dip sleeve exactly as live/run_blend.py trades it (strategy/blend.py)."""
+    cfg = _blend_cfg()["dip"]
+    data = fetch(cfg["tickers"], start, end)
+    signals = {t: blend.dip_signals(df, cfg) for t, df in data.items()}
+    return run(data, signals, blend.engine_cfg(cfg, start, end, "pct"))
+
+
 STRATEGIES = {
     "spy_buy_hold":        ("SPY buy & hold", spy_buy_hold),
     "spy_200d":            ("SPY > 200d avg, else cash", spy_200d),
@@ -201,12 +276,21 @@ STRATEGIES = {
     "momentum_12m":        ("Diversified 12m momentum, equal wt", momentum_12m),
     "momentum_12m_iv":     ("Diversified 12m momentum, inv-vol", lambda s, e: momentum_12m(s, e, "inverse_vol")),
     "dip_buy":             ("Dip-buy RSI(2), SPY+QQQ", dip_buy),
+    "spy_200d_safe":       ("SPY > 200d avg, else SHY", spy_200d_safe),
+    "faber_monthly":       ("SPY > 10-mo avg monthly, else SHY", faber_monthly),
+    "dual_momentum":       ("Dual momentum SPY/EFA/AGG", dual_momentum),
+    "blend_trend_sleeve":  ("Blend config: trend sleeve", blend_trend_sleeve),
+    "blend_dip_sleeve":    ("Blend config: dip sleeve", blend_dip_sleeve),
 }
 
 # name -> {strategy_key: weight}; daily-rebalanced blend of return streams
 BLENDS = {
+    "blend_config":      ("Blend (config/strategy_blend.yaml)", {"blend_trend_sleeve": 0.5, "blend_dip_sleeve": 0.5}),
     "blend_trend_dip":   ("Blend: 50% trend 200d iv + 50% dip-buy", {"trend_200d_iv": 0.5, "dip_buy": 0.5}),
     "blend_master_trend": ("Blend: 50% master + 50% trend 200d iv", {"master": 0.5, "trend_200d_iv": 0.5}),
+    "blend_spy200safe_dip": ("Blend: 50% SPY 200d/SHY + 50% dip-buy", {"spy_200d_safe": 0.5, "dip_buy": 0.5}),
+    "blend_faber_dip":    ("Blend: 50% Faber monthly + 50% dip-buy", {"faber_monthly": 0.5, "dip_buy": 0.5}),
+    "blend_dualmom_dip":  ("Blend: 50% dual momentum + 50% dip-buy", {"dual_momentum": 0.5, "dip_buy": 0.5}),
 }
 
 
@@ -239,7 +323,12 @@ def score(equity, spy_returns, start, end):
 
 
 def main():
-    windows = HOLDOUT_WINDOWS if "--holdout" in sys.argv else DEV_WINDOWS
+    if "--holdout2" in sys.argv:
+        windows, tag = HOLDOUT2_WINDOWS, "holdout2"
+    elif "--holdout" in sys.argv:
+        windows, tag = HOLDOUT_WINDOWS, "holdout"
+    else:
+        windows, tag = DEV_WINDOWS, "dev"
     keys = list(STRATEGIES) + list(BLENDS)
     if "--only" in sys.argv:
         keys = sys.argv[sys.argv.index("--only") + 1].split(",")
@@ -279,7 +368,7 @@ def main():
 
     out_dir = os.path.join("results", "strategy_lab")
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, ("holdout" if "--holdout" in sys.argv else "dev") + ".csv")
+    out = os.path.join(out_dir, tag + ".csv")
     df.to_csv(out, index=False)
     print(f"\nSaved {out}")
 
