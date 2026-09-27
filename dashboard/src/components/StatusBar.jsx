@@ -9,7 +9,7 @@ function timeAgo(dateStr) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-export default function StatusBar({ mode, strategyLabel, lastCheck, onSignOut, view, onViewChange }) {
+export default function StatusBar({ mode, strategy, onStrategyChange, lastCheck, onSignOut, view, onViewChange }) {
   const isStale = !lastCheck || Date.now() - new Date(lastCheck).getTime() > 1000 * 60 * 60 * 30; // >30h
 
   return (
@@ -38,7 +38,8 @@ export default function StatusBar({ mode, strategyLabel, lastCheck, onSignOut, v
           <span style={{ color: "var(--text-muted)" }}>{mode.toUpperCase()}</span>
         </span>
         <span style={{ color: "var(--border-bright)" }}>·</span>
-        <span style={{ color: "var(--accent)" }}>{strategyLabel}</span>
+        <NavTab active={strategy === "master"} onClick={() => onStrategyChange("master")}>master</NavTab>
+        <NavTab active={strategy === "blend"} onClick={() => onStrategyChange("blend")}>trend + dip blend</NavTab>
         <span style={{ color: "var(--border-bright)" }}>·</span>
         <span style={{ color: "var(--text-muted)" }}>
           last check: {timeAgo(lastCheck)}

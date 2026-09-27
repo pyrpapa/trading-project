@@ -64,6 +64,16 @@ Tables use Row Level Security with no public write policies — reachable only v
 
 `.github/workflows/close-position.yml` is a separate, manual-only workflow for closing one specific position on demand (defaults to a dry run — see its own comments).
 
+### Second paper strategy: trend + dip-buy blend
+
+`live/run_blend.py` paper-trades `config/strategy_blend.yaml` on its **own** Alpaca paper account, as a second job in the same daily workflow (no extra cron-job.org job). Half the account follows 10 unleveraged ETFs while they're above their 200-day average; the other half buys sharp 2-day dips in SPY/QQQ during uptrends. See the config's header for why it was picked (`strategy_lab.py`). The job skips itself until it's set up:
+
+1. Run `supabase/migrations/007_strategy_column.sql` in the Supabase SQL Editor **before** merging code that uses it (both runners and the dashboard filter on the new `strategy` column).
+2. Create a second paper account in Alpaca (paper dashboard → account switcher) and generate API keys for it.
+3. Add them as repo secrets `ALPACA_BLEND_API_KEY` / `ALPACA_BLEND_SECRET_KEY`. The runner refuses to start if they match master's keys.
+
+Preview without trading: `python live/run_blend.py --dry-run` (needs the two blend secrets in `.env`). The dashboard's status bar switches between the master and blend records; its Sell button only appears for master, since it acts on master's account.
+
 ## Dashboard
 
 A React console (`dashboard/`) showing equity curve, open positions, a profit/milestone tracker, and recent signals, reading live from Supabase. Its Backtest page lets you configure and run a custom backtest against any config, automatically compared against a baseline (master by default, changeable) over the same window and starting cash — submitted to `api/run_backtest.py`, a Vercel Python function that runs the exact same `run_backtest_for_config()` the CLI and this project's other backtests use, synchronously (this project's runs consistently finish well under Vercel's function timeout, so no GitHub Actions dispatch/poll step is needed for this one).

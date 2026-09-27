@@ -19,7 +19,9 @@ export function pnlColor(n) {
   return n > 0 ? "var(--positive)" : n < 0 ? "var(--negative)" : "var(--text-primary)";
 }
 
-export default function PositionsTable({ openTrades, accessToken }) {
+// canSell=false hides the Sell button -- /api/sell closes positions on the
+// MASTER Alpaca account, so it must never be offered for another strategy's rows.
+export default function PositionsTable({ openTrades, accessToken, canSell = true }) {
   // currentPrices: { TICKER: price } -- fetched on demand via the
   // "Refresh prices" button, not automatically on every load. Manual by
   // design (per request) rather than polling, so opening the dashboard
@@ -110,8 +112,10 @@ export default function PositionsTable({ openTrades, accessToken }) {
               const pnlPct = current != null ? ((current - t.entry_price) / t.entry_price) * 100 : null;
               const sellResult = sellResults[t.ticker];
 
-              let action;
-              if (confirming === t.ticker) {
+              let action = null;
+              if (!canSell) {
+                action = null;
+              } else if (confirming === t.ticker) {
                 action = (
                   <span style={{ display: "flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
                     <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
