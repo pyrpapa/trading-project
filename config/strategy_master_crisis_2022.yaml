@@ -50,4 +50,11 @@ backtest:
   starting_cash: 10000
   start_date: '2020-06-01'
   end_date: '2022-12-31'
-  commission_pct: 0.0
+  # REALISTIC EXECUTION (2026-09-27): fill at the NEXT day's open, the way
+  # live/run_live.py actually trades, instead of at the signal bar's own
+  # close -- see backtest/engine.py's `execution`. 0.05%/side models
+  # spread + slippage (Alpaca charges no commission). Every result in this
+  # file's header dated before 2026-09-27 was measured under the old
+  # signal_close / 0.0 settings and is NOT comparable to runs from here on.
+  commission_pct: 0.05
+  execution: next_open

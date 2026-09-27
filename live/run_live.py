@@ -111,6 +111,14 @@ def main():
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
 
+    # Backtest-only features (backtest/engine.py) with no live
+    # implementation yet -- refuse to trade rather than silently size
+    # positions differently from what the backtest measured.
+    if cfg["risk"].get("sizing_method") == "inverse_vol" or (cfg["risk"].get("vol_target") or {}).get("enabled"):
+        sys.exit("This config uses risk.sizing_method=inverse_vol or risk.vol_target, which only "
+                 "backtest/engine.py supports so far -- live/run_live.py would size positions "
+                 "differently from the backtest. Not trading.")
+
     tickers = portfolio_selection.universe_tickers(cfg)  # candidate_universe if portfolio_selection is on, else watchlist
     take_profit_pct = cfg["exit"].get("take_profit_pct")
     max_position_pct = cfg["risk"]["max_position_pct"] / 100
