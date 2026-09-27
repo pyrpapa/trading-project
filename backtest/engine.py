@@ -56,6 +56,21 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
     """
     starting_cash = cfg["backtest"]["starting_cash"]
     commission_pct = cfg["backtest"].get("commission_pct", 0.0) / 100
+
+    # Execution timing. "signal_close" (default, every pre-2026-09-27
+    # result): decide AND fill at the same daily close -- a price nobody
+    # can actually trade at, since the close is only known once it's
+    # printed. "next_open": decide on day t's close exactly as before
+    # (signals, stop/trend-exit checks, pyramid thresholds, sizing), but
+    # queue the orders and fill them at day t+1's OPEN -- what
+    # live/run_live.py actually does (acts on the last completed daily
+    # bar, trades the next morning). Re-testing strategy_master under a
+    # 1-day lag roughly halved its Calmar in 3 of the 4 standard windows,
+    # so this is the setting to judge real edge with.
+    execution = cfg["backtest"].get("execution", "signal_close")
+    if execution not in ("signal_close", "next_open"):
+        raise ValueError(f"backtest.execution must be 'signal_close' or 'next_open', got {execution!r}")
+    next_open = execution == "next_open"
     take_profit_pct = cfg["exit"].get("take_profit_pct")
     take_profit_pct = take_profit_pct / 100 if take_profit_pct else None
     max_position_pct = cfg["risk"]["max_position_pct"] / 100
@@ -144,6 +159,47 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
     corr_threshold = correlation_cfg.get("correlation_threshold", 0.7)
     corr_max_correlated = correlation_cfg.get("max_correlated_positions", 2)
 
+    # Portfolio volatility targeting -- scales NEW buying (fresh entries,
+    # pyramid adds) and the max_invested_pct ceiling by
+    # min(1, target / realized vol of the portfolio's own daily returns
+    # over the last `lookback_days`). Calm stretches trade at full size;
+    # when the account's own swings run hotter than target, new exposure
+    # shrinks proportionally (Moreira & Muir 2017, "Volatility-Managed
+    # Portfolios"). Never levers UP past 1x, and never force-trims
+    # positions already open -- it only throttles what gets added.
+    # Disabled unless a config opts in via risk.vol_target.enabled.
+    vol_target_cfg = cfg["risk"].get("vol_target") or {}
+    vol_target_enabled = vol_target_cfg.get("enabled", False)
+    vol_target_annual = vol_target_cfg.get("target_annual_pct", 15.0) / 100
+    vol_target_lookback = vol_target_cfg.get("lookback_days", 20)
+
+    def exposure_scalar():
+        if not vol_target_enabled or len(equity_curve) <= vol_target_lookback:
+            return 1.0
+        recent = pd.Series([row["portfolio_value"] for row in equity_curve[-(vol_target_lookback + 1):]])
+        realized = recent.pct_change().dropna().std() * np.sqrt(252)
+        if not realized or pd.isna(realized) or realized <= 0:
+            return 1.0
+        return min(1.0, vol_target_annual / realized)
+
+    # Inverse-volatility sizing (risk.sizing_method: "inverse_vol") -- each
+    # new position gets target_position_vol_pct / (the ticker's own
+    # realized annual vol over lookback_days) of equity, capped by
+    # max_position_pct. A 40%-vol asset gets a quarter the weight of a
+    # 10%-vol one, so every holding contributes similar risk -- the
+    # standard sizing for diversified trend-following across asset
+    # classes. No stop is implied (unlike atr_unit); exit.stop_loss_pct
+    # still applies if set.
+    inverse_vol_cfg = cfg["risk"].get("inverse_vol") or {}
+    inverse_vol_target = inverse_vol_cfg.get("target_position_vol_pct", 10.0) / 100
+    inverse_vol_lookback = inverse_vol_cfg.get("lookback_days", 60)
+    realized_vol = {}
+    if sizing_method == "inverse_vol":
+        realized_vol = {
+            t: df["Close"].pct_change().rolling(inverse_vol_lookback).std() * np.sqrt(252)
+            for t, df in price_data.items()
+        }
+
     # Stop-out cooldown -- blocks re-entry into a ticker for `days` after
     # it exits via stop_loss specifically (not trend_exit/take_profit).
     # Targets "immediately re-enter and get whipsawed again": a stock
@@ -196,6 +252,64 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
     active_tickers = set(price_data.keys()) if not ps_enabled else set()
     next_rebalance_date = all_dates[0] if (ps_enabled and all_dates) else None
     equity_curve = []
+    # next_open mode only: orders decided on the previous trading day,
+    # filled at today's open (see execute_pending_orders below).
+    pending_exits = {}     # ticker -> (exit_reason, trend_reason)
+    pending_pyramids = []  # dicts: ticker, allocation, risk_per_share, sizing_note, atr
+    pending_entries = []   # dicts: ticker, allocation, risk_per_share, sizing_note, entry_reason
+
+    def open_price(ticker, date):
+        """Today's Open for `ticker`, or None if it has no usable row today."""
+        df = price_data.get(ticker)
+        if df is None or date not in df.index or "Open" not in df.columns:
+            return None
+        px = df.loc[date, "Open"]
+        return px if pd.notna(px) and px > 0 else None
+
+    def close_stack(ticker, date, price, exit_reason, trend_reason):
+        """Sells every unit of `ticker`'s stack at `price`, adds the
+        proceeds (net of commission) to cash, and records one closed trade
+        per unit. Shared by both execution modes. Proceeds are added to
+        cash one unit at a time, the order the original inline code used:
+        summing first changes float rounding, and later "cost > cash"
+        checks on positions sized to exactly the remaining cash are
+        knife-edge enough for that to change which trades happen."""
+        nonlocal cash
+        stack = open_positions.pop(ticker)
+        for pos in stack:
+            unit_change_pct = (price - pos.entry_price) / pos.entry_price
+            proceeds = pos.shares * price * (1 - commission_pct)
+            cash += proceeds
+            return_pct = unit_change_pct * 100
+            pnl = proceeds - (pos.shares * pos.entry_price)
+            r_multiple = (
+                pnl / pos.initial_risk_dollars
+                if pos.initial_risk_dollars else None
+            )
+            exit_reason_detail = journal.exit_reason_text(exit_reason, cfg, trend_reason=trend_reason)
+            closed_trades.append({
+                "ticker": ticker,
+                "entry_date": pos.entry_date,
+                "entry_price": pos.entry_price,
+                "exit_date": date,
+                "exit_price": price,
+                "shares": pos.shares,
+                "pnl": pnl,
+                "return_pct": return_pct,
+                "exit_reason": exit_reason,
+                "entry_reason": pos.entry_reason,
+                "entry_log": pos.entry_log,
+                "exit_reason_detail": exit_reason_detail,
+                "exit_log": journal.format_exit(ticker, price, return_pct, exit_reason_detail, r_multiple=r_multiple),
+                "sizing_method": pos.sizing_method,
+                "initial_risk_dollars": pos.initial_risk_dollars,
+                "r_multiple": r_multiple,
+                "unit_number": pos.unit_number,
+                "units_in_stack": len(stack),
+            })
+        peak_price.pop(ticker, None)
+        if exit_reason == "stop_loss" and cooldown_enabled:
+            last_stop_date[ticker] = date
 
     def mark_price(ticker, date):
         """Price to mark an open position at for `date`. Falls back to the
@@ -215,6 +329,77 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
         return last_price.get(ticker)
 
     for date in all_dates:
+        # --- next_open mode: fill yesterday's queued orders at today's open ---
+        # Same order live/run_live.py acts in: exits, then pyramid adds,
+        # then fresh entries (so a same-run exit's proceeds can fund a
+        # re-entry, and a stopped-out ticker whose BUY still holds is sold
+        # and re-bought at the same open -- the backtest's long-standing
+        # same-bar re-entry behavior, now at a tradeable price). A ticker
+        # with no usable open today keeps a pending EXIT for tomorrow;
+        # pending buys for it are dropped instead (the signal is stale).
+        if next_open:
+            for ticker in list(pending_exits):
+                if ticker not in open_positions:
+                    del pending_exits[ticker]
+                    continue
+                px = open_price(ticker, date)
+                if px is None:
+                    continue
+                exit_reason, trend_reason = pending_exits.pop(ticker)
+                close_stack(ticker, date, px, exit_reason, trend_reason)
+
+            for order in pending_pyramids:
+                ticker = order["ticker"]
+                stack = open_positions.get(ticker)
+                px = open_price(ticker, date)
+                if not stack or px is None:
+                    continue
+                allocation = min(order["allocation"], cash / (1 + commission_pct))
+                shares = allocation / px
+                if shares <= 0:
+                    continue
+                new_unit_stop = px - order["risk_per_share"]
+                synced_stop = max(stack[0].stop_price, new_unit_stop) if stack[0].stop_price is not None else new_unit_stop
+                for p in stack:
+                    p.stop_price = synced_stop
+                unit_number = len(stack) + 1
+                add_reason = journal.pyramid_add_reason_text(unit_number, pyramid_max_units, pyramid_unit_interval_n)
+                add_log = journal.format_pyramid_add(ticker, unit_number, pyramid_max_units, px, sizing_note=order["sizing_note"])
+                cash -= shares * px * (1 + commission_pct)
+                stack.append(Position(
+                    ticker, date, px, shares, add_reason, add_log,
+                    synced_stop, order["risk_per_share"] * shares, sizing_method, unit_number=unit_number,
+                ))
+                pyramid_log.append({
+                    "date": date, "ticker": ticker, "unit_number": unit_number,
+                    "price": px, "shares": shares, "log": add_log,
+                })
+
+            for order in pending_entries:
+                ticker = order["ticker"]
+                px = open_price(ticker, date)
+                if ticker in open_positions or px is None:
+                    continue
+                allocation = min(order["allocation"], cash / (1 + commission_pct))
+                shares = allocation / px
+                if shares <= 0:
+                    continue
+                risk_per_share = order["risk_per_share"]
+                if risk_per_share is None and order["stop_loss_pct"]:
+                    risk_per_share = px * (order["stop_loss_pct"] / 100)
+                stop_price = (px - risk_per_share) if risk_per_share else None
+                entry_log = journal.format_entry(ticker, px, order["entry_reason"], sizing_note=order["sizing_note"])
+                cash -= shares * px * (1 + commission_pct)
+                open_positions[ticker] = [Position(
+                    ticker, date, px, shares, order["entry_reason"], entry_log,
+                    stop_price, (risk_per_share * shares) if risk_per_share else None,
+                    sizing_method, unit_number=1,
+                )]
+                peak_price[ticker] = px
+
+            pending_pyramids = []
+            pending_entries = []
+
         # Portfolio selection rebalance check -- happens BEFORE the day's
         # exits/entries, using only price history up to (and including)
         # `date`, so there's no lookahead. Existing open positions in a
@@ -281,50 +466,34 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                     trend_reason = signals[ticker].loc[date, "reason"]
 
             if exit_reason:
-                for pos in stack:
-                    unit_change_pct = (price - pos.entry_price) / pos.entry_price
-                    proceeds = pos.shares * price * (1 - commission_pct)
-                    cash += proceeds
-                    return_pct = unit_change_pct * 100
-                    pnl = proceeds - (pos.shares * pos.entry_price)
-                    r_multiple = (
-                        pnl / pos.initial_risk_dollars
-                        if pos.initial_risk_dollars else None
-                    )
-                    exit_reason_detail = journal.exit_reason_text(exit_reason, cfg, trend_reason=trend_reason)
-                    closed_trades.append({
-                        "ticker": ticker,
-                        "entry_date": pos.entry_date,
-                        "entry_price": pos.entry_price,
-                        "exit_date": date,
-                        "exit_price": price,
-                        "shares": pos.shares,
-                        "pnl": pnl,
-                        "return_pct": return_pct,
-                        "exit_reason": exit_reason,
-                        "entry_reason": pos.entry_reason,
-                        "entry_log": pos.entry_log,
-                        "exit_reason_detail": exit_reason_detail,
-                        "exit_log": journal.format_exit(ticker, price, return_pct, exit_reason_detail, r_multiple=r_multiple),
-                        "sizing_method": pos.sizing_method,
-                        "initial_risk_dollars": pos.initial_risk_dollars,
-                        "r_multiple": r_multiple,
-                        "unit_number": pos.unit_number,
-                        "units_in_stack": len(stack),
-                    })
-                del open_positions[ticker]
-                peak_price.pop(ticker, None)
-                if exit_reason == "stop_loss" and cooldown_enabled:
-                    last_stop_date[ticker] = date
+                if next_open:
+                    pending_exits[ticker] = (exit_reason, trend_reason)
+                else:
+                    close_stack(ticker, date, price, exit_reason, trend_reason)
 
-        # Recompute invested value after exits
+        # Recompute invested value after exits. In next_open mode a stack
+        # queued to exit is still held tonight, but everything below
+        # (pyramid adds, trailing stop, entry sizing) treats it as already
+        # gone -- valued at today's close as a proxy for tomorrow's
+        # proceeds -- the same view live/run_live.py takes right after it
+        # submits a sell.
         invested_value = sum(
             pos.value(mark_price(t, date))
             for t, stack in open_positions.items()
-            if mark_price(t, date) is not None
+            if t not in pending_exits and mark_price(t, date) is not None
             for pos in stack
         )
-        portfolio_value = cash + invested_value
+        # Cash available for today's buy decisions. Identical to `cash` in
+        # signal_close mode; in next_open mode it also counts proceeds from
+        # queued exits and nets out buys already queued today.
+        budget_cash = cash + sum(
+            pos.value(mark_price(t, date)) * (1 - commission_pct)
+            for t in pending_exits if mark_price(t, date) is not None
+            for pos in open_positions[t]
+        )
+        portfolio_value = budget_cash + invested_value
+        scalar = exposure_scalar()  # 1.0 unless risk.vol_target is on
+        invested_cap_pct = max_invested_pct * scalar
 
         # --- Check pyramid adds (existing open stacks only) ---
         # This is a PURE PRICE THRESHOLD check, not a fresh entry signal --
@@ -337,6 +506,8 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
         # unit's stop level every time a unit is added.
         if pyramiding_enabled:
             for ticker in list(open_positions.keys()):
+                if ticker in pending_exits:
+                    continue
                 stack = open_positions[ticker]
                 if len(stack) >= pyramid_max_units:
                     continue
@@ -358,25 +529,39 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                 if price < threshold_price:
                     continue
 
-                invested_value = sum(
-                    pos.value(mark_price(t, date))
-                    for t, s in open_positions.items()
-                    if mark_price(t, date) is not None
-                    for pos in s
-                )
-                portfolio_value = cash + invested_value
+                if not next_open:
+                    invested_value = sum(
+                        pos.value(mark_price(t, date))
+                        for t, s in open_positions.items()
+                        if mark_price(t, date) is not None
+                        for pos in s
+                    )
+                    portfolio_value = cash + invested_value
                 max_position_value = portfolio_value * max_position_pct_for(ticker)
                 stack_value = sum(p.value(price) for p in stack)
                 room_in_position = max_position_value - stack_value
-                room_left = (portfolio_value * max_invested_pct) - invested_value
+                room_left = (portfolio_value * invested_cap_pct) - invested_value
 
                 stop_atr_multiple = cfg["risk"]["stop_atr_multiple"]
                 risk_pct_per_unit = cfg["risk"]["risk_pct_per_unit"]
                 risk_per_share = stop_atr_multiple * atr
                 dollar_risk_budget = portfolio_value * (risk_pct_per_unit / 100)
-                atr_allocation = (dollar_risk_budget / risk_per_share) * price
-                allocation = min(atr_allocation, room_in_position, room_left, cash)
+                atr_allocation = (dollar_risk_budget / risk_per_share) * price * scalar
+                allocation = min(atr_allocation, room_in_position, room_left, budget_cash)
                 if allocation <= 0:
+                    continue
+
+                sizing_note = (
+                    f"pyramid unit sized to risk {risk_pct_per_unit:.1f}% of equity "
+                    f"(N=${atr:.2f}, stop {stop_atr_multiple:.1f}N away)"
+                )
+                if next_open:
+                    pending_pyramids.append({
+                        "ticker": ticker, "allocation": allocation,
+                        "risk_per_share": risk_per_share, "sizing_note": sizing_note,
+                    })
+                    budget_cash -= allocation * (1 + commission_pct)
+                    invested_value += allocation
                     continue
 
                 shares = allocation / price
@@ -394,14 +579,11 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
 
                 unit_number = len(stack) + 1
                 initial_risk_dollars = risk_per_share * shares
-                sizing_note = (
-                    f"pyramid unit sized to risk {risk_pct_per_unit:.1f}% of equity "
-                    f"(N=${atr:.2f}, stop {stop_atr_multiple:.1f}N away)"
-                )
                 add_reason = journal.pyramid_add_reason_text(unit_number, pyramid_max_units, pyramid_unit_interval_n)
                 add_log = journal.format_pyramid_add(ticker, unit_number, pyramid_max_units, price, sizing_note=sizing_note)
 
                 cash -= cost
+                budget_cash -= cost
                 stack.append(Position(
                     ticker, date, price, shares, add_reason, add_log,
                     synced_stop, initial_risk_dollars, sizing_method, unit_number=unit_number,
@@ -411,14 +593,17 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                     "price": price, "shares": shares, "log": add_log,
                 })
 
-            # Recompute invested value after pyramid adds
-            invested_value = sum(
-                pos.value(mark_price(t, date))
-                for t, stack in open_positions.items()
-                if mark_price(t, date) is not None
-                for pos in stack
-            )
-            portfolio_value = cash + invested_value
+            # Recompute invested value after pyramid adds (next_open mode
+            # already tracked queued adds in invested_value/budget_cash)
+            if not next_open:
+                invested_value = sum(
+                    pos.value(mark_price(t, date))
+                    for t, stack in open_positions.items()
+                    if mark_price(t, date) is not None
+                    for pos in stack
+                )
+                budget_cash = cash
+                portfolio_value = cash + invested_value
 
         # --- Update peak-based trailing stop (existing open stacks only) ---
         # Deliberately runs AFTER today's stop-loss/trend-exit check above
@@ -431,6 +616,8 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
         # "shared across the stack" convention stop_price already uses.
         if trailing_stop_enabled:
             for ticker, stack in open_positions.items():
+                if ticker in pending_exits:
+                    continue
                 df = price_data[ticker]
                 if date not in df.index:
                     continue
@@ -454,7 +641,10 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
 
         # --- Check entries ---
         for ticker, sig_df in signals.items():
-            if ticker in open_positions:
+            # A stack queued to exit at tomorrow's open can be re-entered
+            # (sold and re-bought at that same open), mirroring the
+            # same-bar re-entry signal_close mode has always done.
+            if ticker in open_positions and ticker not in pending_exits:
                 continue
             if ps_enabled and ticker not in active_tickers:
                 continue
@@ -468,8 +658,10 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                 continue
 
             if correlation_enabled:
+                held = [t for t in open_positions if t not in pending_exits]
+                held += [o["ticker"] for o in pending_entries]
                 corr_count = correlation.correlated_position_count(
-                    ticker, open_positions.keys(), price_data, date, corr_lookback, corr_threshold
+                    ticker, held, price_data, date, corr_lookback, corr_threshold
                 )
                 if corr_count >= corr_max_correlated:
                     reason = correlation.breaker_reason(ticker, corr_count, corr_threshold, corr_max_correlated)
@@ -493,7 +685,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                     continue
 
             max_position_value = portfolio_value * max_position_pct_for(ticker)
-            room_left = (portfolio_value * max_invested_pct) - invested_value
+            room_left = (portfolio_value * invested_cap_pct) - invested_value
             atr = sig_df.loc[date, "atr"] if "atr" in sig_df.columns else None
             sizing_note = None
             risk_per_share = None  # dollars of risk per share if stopped out = "1R" per share
@@ -505,19 +697,39 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
                 risk_pct_per_unit = cfg["risk"]["risk_pct_per_unit"]
                 risk_per_share = stop_atr_multiple * atr
                 dollar_risk_budget = portfolio_value * (risk_pct_per_unit / 100)
-                atr_allocation = (dollar_risk_budget / risk_per_share) * price
+                atr_allocation = (dollar_risk_budget / risk_per_share) * price * scalar
                 # max_position_pct/max_invested_pct still apply as a ceiling on top.
-                allocation = min(atr_allocation, max_position_value, room_left, cash)
+                allocation = min(atr_allocation, max_position_value, room_left, budget_cash)
                 sizing_note = (
                     f"sized to risk {risk_pct_per_unit:.1f}% of equity "
                     f"(N=${atr:.2f}, stop {stop_atr_multiple:.1f}N away)"
                 )
+            elif sizing_method == "inverse_vol":
+                vol = realized_vol[ticker].get(date) if ticker in realized_vol else None
+                if vol is None or pd.isna(vol) or vol <= 0:
+                    continue  # not enough history to size it yet
+                weight = min(inverse_vol_target / vol, max_position_pct_for(ticker))
+                allocation = min(portfolio_value * weight * scalar, room_left, budget_cash)
+                sizing_note = f"sized to {inverse_vol_target * 100:.0f}% target vol (realized {vol * 100:.0f}%)"
             else:
                 # Flat % sizing (v1-v4 behavior), or atr_unit requested but ATR
                 # isn't available yet (not enough history) — falls back safely.
-                allocation = min(max_position_value, room_left, cash)
+                allocation = min(max_position_value * scalar, room_left, budget_cash)
 
             if allocation <= 0:
+                continue
+
+            if next_open:
+                # Flat-% stops are re-derived from the actual fill price;
+                # N-based stops keep today's N (risk_per_share is dollars).
+                pending_entries.append({
+                    "ticker": ticker, "allocation": allocation,
+                    "risk_per_share": risk_per_share,
+                    "stop_loss_pct": cfg["exit"].get("stop_loss_pct"),
+                    "sizing_note": sizing_note, "entry_reason": sig_df.loc[date, "reason"],
+                })
+                budget_cash -= allocation * (1 + commission_pct)
+                invested_value += allocation
                 continue
 
             shares = allocation / price
@@ -539,6 +751,7 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
             entry_log = journal.format_entry(ticker, price, entry_reason, sizing_note=sizing_note)
 
             cash -= cost
+            budget_cash -= cost
             open_positions[ticker] = [Position(
                 ticker, date, price, shares, entry_reason, entry_log,
                 stop_price, initial_risk_dollars, sizing_method, unit_number=1,
@@ -546,6 +759,16 @@ def run_backtest(price_data: dict, signals: dict, cfg: dict, benchmark_returns: 
             peak_price[ticker] = price
             invested_value += shares * price
 
+        if next_open:
+            # End-of-day equity is what's ACTUALLY held tonight: every open
+            # stack (including ones queued to exit tomorrow) at today's
+            # close, plus real cash -- queued buys haven't spent anything yet.
+            invested_value = sum(
+                pos.value(mark_price(t, date))
+                for t, stack in open_positions.items()
+                if mark_price(t, date) is not None
+                for pos in stack
+            )
         portfolio_value = cash + invested_value
 
         # --- Side pot skim check (see side_pot block above) --- runs once

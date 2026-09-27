@@ -28,3 +28,4 @@ results/parameter-sweep/
 # Same rationale, for holdout_test.py's output -- fully regeneratable
 # with `python holdout_test.py`.
 results/holdout-test/
+results/strategy_lab/
